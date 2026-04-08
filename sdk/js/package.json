@@ -1,0 +1,16 @@
+{
+  "name": "agrr-sdk",
+  "version": "0.1.0",
+  "description": "JavaScript SDK for building agrr-compatible scripts",
+  "main": "index.js",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "index.js"
+  ],
+  "scripts": {
+    "test": "node --test tests/agrr-sdk.test.js"
+  }
+}

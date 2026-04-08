@@ -1,0 +1,52 @@
+/target
+/agrr/target
+/sdk/rust/target
+
+# Scripts — Rust targets
+scripts/**/target/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.pytest_cache/
+
+# Scripts — Python
+scripts/**/__pycache__/
+scripts/**/*.py[cod]
+scripts/**/*.egg-info/
+scripts/**/dist/
+scripts/**/build/
+scripts/**/.venv/
+
+# JS
+node_modules/
+*.log
+.npm
+
+# Scripts — JS/Node
+scripts/**/node_modules/
+scripts/**/*.log
+scripts/**/.npm
+
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# agrr runtime
+~/.config/agrr/credentials.enc
