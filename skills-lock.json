@@ -10,6 +10,11 @@
       "source": "jeffallan/claude-skills",
       "sourceType": "github",
       "computedHash": "5a8b4c69ded4bec7009af144c8aea3de5f463765f211c780afea8d7a47fb35e6"
+    },
+    "tui-design": {
+      "source": "hyperb1iss/hyperskills",
+      "sourceType": "github",
+      "computedHash": "a807655c5e944f7b395754c82e2bb47e39527e52c863ba79e151f9f35799835f"
     }
   }
 }
