@@ -4,7 +4,6 @@ use std::process::{Command, Stdio};
 
 use crate::credentials;
 use crate::discovery::ScriptEntry;
-use crate::runtime::RuntimeSource;
 
 /// Exit status of a script execution.
 #[derive(Debug, PartialEq)]
@@ -138,43 +137,53 @@ fn build_run_command(
 }
 
 fn interpreter_command(entry: &ScriptEntry) -> Command {
-    match entry.resolved_runtime.source {
-        RuntimeSource::Native => {
-            // Native compiled binary — invoke directly.
-            Command::new(&entry.path)
-        }
-        RuntimeSource::Pyenv | RuntimeSource::Path | RuntimeSource::Nvm => {
-            let mut cmd = Command::new(&entry.resolved_runtime.executable);
+    let ext = entry
+        .path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    match ext.as_str() {
+        "py" => {
+            let python = which::which("python3")
+                .or_else(|_| which::which("python"))
+                .expect("python3 não encontrado no PATH");
+            let mut cmd = Command::new(python);
             cmd.arg(&entry.path);
             cmd
+        }
+        "js" | "mjs" => {
+            let node =
+                which::which("node").expect("node não encontrado no PATH");
+            let mut cmd = Command::new(node);
+            cmd.arg(&entry.path);
+            cmd
+        }
+        _ => {
+            // Compiled binary — invoke directly.
+            Command::new(&entry.path)
         }
     }
 }
 
 fn describe_runtime(entry: &ScriptEntry) -> String {
-    let filename = entry.path.file_name().unwrap_or_default().to_string_lossy();
+    let filename = entry
+        .path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let ext = entry
+        .path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
 
-    match entry.resolved_runtime.source {
-        RuntimeSource::Native => format!("Executando {} (binário nativo)", filename),
-        ref source => format!(
-            "Executando com {} {} via {}",
-            language_label(entry),
-            entry.resolved_runtime.version,
-            source
-        ),
-    }
-}
-
-fn language_label(entry: &ScriptEntry) -> &'static str {
-    match entry
-        .manifest
-        .runtime
-        .as_ref()
-        .map(|r| &r.language)
-    {
-        Some(crate::manifest::Language::Python) => "Python",
-        Some(crate::manifest::Language::Node) => "Node",
-        None => "runtime",
+    match ext.as_str() {
+        "py" => format!("Executando {} com Python", filename),
+        "js" | "mjs" => format!("Executando {} com Node.js", filename),
+        _ => format!("Executando {} (binário nativo)", filename),
     }
 }
 

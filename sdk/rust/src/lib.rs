@@ -119,7 +119,7 @@ pub trait AgrrScript {
 /// #         agrr_script_sdk::ScriptMeta {
 /// #             name: "s".into(), description: "d".into(),
 /// #             group: "g".into(), version: "1.0.0".into(),
-/// #             runtime: None, requires_auth: vec![], args: vec![],
+/// #             runtime: None, requires_auth: vec![], args: vec![], global_auth: false,
 /// #         }
 /// #     }
 /// #     fn run(&self, _: agrr_script_sdk::Credentials, _: agrr_script_sdk::Args)

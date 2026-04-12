@@ -4,7 +4,6 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 use crate::manifest::{ManifestError, ScriptManifest};
-use crate::runtime::{self, ResolvedRuntime, RuntimeNotFound};
 
 const META_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -15,8 +14,6 @@ pub struct ScriptEntry {
     pub path: PathBuf,
     /// Parsed and validated manifest.
     pub manifest: ScriptManifest,
-    /// Resolved runtime (executable + version). Native binaries have source == Native.
-    pub resolved_runtime: ResolvedRuntime,
 }
 
 /// A script candidate that failed to load, with a human-readable reason.
@@ -96,7 +93,6 @@ pub async fn discover(scripts_dir: &Path) -> ScriptRegistry {
 /// Attempt to load a single script candidate:
 /// 1. Invoke `--agrr-meta` with timeout
 /// 2. Parse & validate manifest
-/// 3. Resolve runtime
 async fn load_script(path: &Path) -> Result<ScriptEntry, String> {
     let raw_json = fetch_meta(path).await?;
 
@@ -105,26 +101,9 @@ async fn load_script(path: &Path) -> Result<ScriptEntry, String> {
         other => other.to_string(),
     })?;
 
-    // Scripts interpretados (.py, .js, .mjs) devem declarar o campo `runtime`.
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    if matches!(ext.as_str(), "py" | "js" | "mjs") && manifest.runtime.is_none() {
-        return Err(format!(
-            "campo `runtime` obrigatório para scripts .{} — declare language e min_version no manifest",
-            ext
-        ));
-    }
-
-    let resolved_runtime =
-        runtime::resolve(manifest.runtime.as_ref()).map_err(|e: RuntimeNotFound| e.to_string())?;
-
     Ok(ScriptEntry {
         path: path.to_path_buf(),
         manifest,
-        resolved_runtime,
     })
 }
 

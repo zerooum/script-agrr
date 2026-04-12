@@ -45,7 +45,7 @@ Pressing `/` SHALL activate a filter input at the bottom of the TUI. As the user
 - **THEN** the search query is cleared and the full menu is restored
 
 ### Requirement: TUI displays startup validation warnings
-Warnings produced during the discovery phase (invalid scripts, missing runtimes) SHALL be displayed in a dismissible panel before the main menu, or in a dedicated status area within the TUI.
+Warnings produced during the discovery phase (invalid scripts) SHALL be displayed in a dismissible panel before the main menu, or in a dedicated status area within the TUI.
 
 #### Scenario: Warnings shown after discovery
 - **WHEN** discovery produces one or more warnings

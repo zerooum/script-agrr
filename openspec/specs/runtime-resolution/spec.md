@@ -1,8 +1,13 @@
 # runtime-resolution Specification
 
 ## Purpose
-TBD - created by archiving change agrr-cli. Update Purpose after archive.
-## Requirements
+
+> **DEPRECATED** — This spec described pyenv/nvm-based runtime resolution that was removed after the `build-standalone-scripts` change. All scripts are now compiled to standalone binaries; the CLI invokes them directly without resolving interpreters. The `runtime` field in manifests is accepted but ignored. See `build-standalone-scripts` change for context.
+
+## Historical Requirements (no longer implemented)
+
+The requirements below are preserved for reference only. The `runtime.rs` module and `ResolvedRuntime`/`RuntimeSource` types have been removed from the codebase.
+
 ### Requirement: CLI resolves Python runtime using pyenv if available
 When a script declares `runtime.language = "python"`, the CLI SHALL attempt to resolve the interpreter using pyenv before falling back to PATH.
 

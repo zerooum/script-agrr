@@ -20,6 +20,7 @@ impl AgrrScript for HelloWorld {
             version: "1.0.0".into(),
             runtime: None, // binários nativos não precisam de runtime
             requires_auth: vec![],
+            global_auth: false,
             args: vec![
                 ArgSpec {
                     name: "nome".into(),

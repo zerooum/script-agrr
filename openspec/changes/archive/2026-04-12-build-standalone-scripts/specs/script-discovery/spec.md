@@ -1,9 +1,5 @@
-# script-discovery Specification
+## MODIFIED Requirements
 
-## Purpose
-Defines how the CLI discovers script candidates inside `scripts/`, including single-file scripts, multi-file folder scripts, and startup timeout behavior.
-
-## Requirements
 ### Requirement: Candidatos de script são coletados da pasta scripts
 A CLI SHALL resolver o diretório de scripts usando a seguinte lógica de prioridade:
 1. Se existir uma pasta `scripts/` no diretório pai do executável da TUI (`std::env::current_exe().parent()`), usar essa pasta (modo distribuição/build)
@@ -56,16 +52,3 @@ A CLI SHALL varrer o diretório de scripts resolvido e tratar como candidatos de
 - **WHEN** o diretório de scripts resolvido não existe
 - **THEN** the CLI starts with an empty menu
 - **THEN** the CLI displays a message: "Nenhum script encontrado em ./scripts/"
-
-### ~~Requirement: Discovery warns about missing runtime~~
-
-> **Removed** — Runtime resolution was removed after the `build-standalone-scripts` change. All scripts are compiled to standalone binaries; the `runtime` manifest field is accepted but ignored by the CLI.
-
-### Requirement: Discovery has a per-script timeout
-Each `--agrr-meta` invocation SHALL be bounded by a 5-second timeout to prevent a slow or hanging script from blocking startup.
-
-#### Scenario: Script hangs during meta invocation
-- **WHEN** a script does not respond to `--agrr-meta` within 5 seconds
-- **THEN** the process is killed
-- **THEN** the CLI displays: "Script <filename> não carregado. Motivo: timeout na leitura do manifest (>5s)"
-

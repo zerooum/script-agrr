@@ -300,7 +300,6 @@ mod tests {
 
     use super::*;
     use crate::manifest::{ArgSpec, ScriptManifest};
-    use crate::runtime::{ResolvedRuntime, RuntimeSource};
 
     fn make_entry(name: &str, group: &str, description: &str, requires_auth: Vec<String>) -> ScriptEntry {
         ScriptEntry {
@@ -314,11 +313,6 @@ mod tests {
                 requires_auth,
                 runtime: None,
                 global_auth: false,
-            },
-            resolved_runtime: ResolvedRuntime {
-                executable: PathBuf::from("/usr/bin/python3"),
-                version: "3.11.0".to_string(),
-                source: RuntimeSource::Path,
             },
         }
     }

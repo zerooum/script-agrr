@@ -19,9 +19,8 @@ agrr is an interactive CLI that aggregates team scripts via a subprocess protoco
 - `app.rs` — 12-state FSM (Menu → Search → CollectingCred → AskSaveCred → CollectingArgs → Running → ExecutionResult → AuthErrorPrompt → CredManager → CredManagerSaving → CredManagerClearConfirm → Quit)
 - `credentials.rs` — OS keychain via `keyring`; fallback to AES-256-GCM encrypted file; `GLOBAL_KEYS = ["CHAVE", "SENHA"]`
 - `discovery.rs` — Scans `scripts/`, supports single files and multi-file folders (`main.*`); invokes `--agrr-meta` (5 s timeout), validates manifest
-- `executor.rs` — Builds subprocess, injects `AGRR_CRED_*`/`AGRR_ARG_*` env vars, streams output; injects global creds when `global_auth: true`
+- `executor.rs` — Builds subprocess, injects `AGRR_CRED_*`/`AGRR_ARG_*` env vars, streams output; injects global creds when `global_auth: true`; dispatches by file extension (`.py` → python3, `.js` → node, no ext → native binary)
 - `manifest.rs` — `ScriptManifest` serde struct with required-field validation; optional `global_auth: bool`
-- `runtime.rs` — Resolves pyenv/nvm → PATH; picks highest version ≥ `min_version`
 - `ui.rs` — ratatui rendering (menu, search, prompts, scrollable output, credential manager)
 
 ## Build & Test
@@ -52,7 +51,7 @@ AGRR_ARG_<UPPERCASE_NAME>   — arguments
 ```
 
 ### Manifest Required Fields
-`name`, `description`, `group`, `version` — all non-empty strings. `runtime`, `requires_auth`, `args`, `global_auth` are optional.
+`name`, `description`, `group`, `version` — all non-empty strings. `requires_auth`, `args`, `global_auth` are optional. The `runtime` field is accepted but ignored by the CLI (kept for backward compatibility with script manifests).
 
 ### Global Credentials (`global_auth`)
 Scripts that set `global_auth: true` in their manifest receive two additional credentials shared across all such scripts:
