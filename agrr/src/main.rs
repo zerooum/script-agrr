@@ -75,6 +75,12 @@ async fn run_app(
                 KeyCode::Char('/') => {
                     app.mode = Mode::Search;
                 }
+                KeyCode::Char('c') | KeyCode::Char('C') => {
+                    let has_auth = app.registry.iter().any(|e| !e.manifest.requires_auth.is_empty());
+                    if has_auth {
+                        app.mode = Mode::CredManager { cursor: 0 };
+                    }
+                }
                 KeyCode::Enter => {
                     app.begin_execute();
                 }
@@ -271,6 +277,176 @@ async fn run_app(
             Mode::Running => {
                 // Running is synchronous — this branch is only reached if
                 // we ever add async execution. No-op for now.
+            }
+
+            // ── Credential manager ───────────────────────────────────────────
+            Mode::CredManager { cursor } => {
+                let cur = *cursor;
+                let scripts_with_auth: Vec<usize> = (0..app.registry.len())
+                    .filter(|&i| !app.registry[i].manifest.requires_auth.is_empty())
+                    .collect();
+                // cursor 0 = Globais, cursor 1..=scripts_with_auth.len() = scripts
+                let max_cursor = scripts_with_auth.len(); // inclusive (global at 0)
+
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') => app.mode = Mode::Menu,
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if cur > 0 {
+                            app.mode = Mode::CredManager { cursor: cur - 1 };
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if cur < max_cursor {
+                            app.mode = Mode::CredManager { cursor: cur + 1 };
+                        }
+                    }
+                    KeyCode::Enter | KeyCode::Char('s') | KeyCode::Char('S') => {
+                        if cur == 0 {
+                            // Global entry
+                            let global_keys = credentials::GLOBAL_KEYS;
+                            let all_saved = global_keys.iter().all(|&k| credentials::get(k).is_some());
+                            if all_saved {
+                                app.mode = Mode::CredManagerClearConfirm {
+                                    cred_manager_cursor: cur,
+                                    script_idx: None,
+                                };
+                            } else {
+                                let next_key = global_keys.iter()
+                                    .find(|&&k| credentials::get(k).is_none())
+                                    .map(|&k| k.to_string());
+                                if let Some(k) = next_key {
+                                    app.mode = Mode::CredManagerSaving {
+                                        cred_manager_cursor: cur,
+                                        script_idx: None,
+                                        key: k,
+                                        input: String::new(),
+                                    };
+                                }
+                            }
+                        } else if let Some(&script_idx) = scripts_with_auth.get(cur - 1) {
+                            let requires_auth = app.registry[script_idx].manifest.requires_auth.clone();
+                            let all_saved = requires_auth.iter().all(|k| credentials::get(k).is_some());
+                            if all_saved {
+                                app.mode = Mode::CredManagerClearConfirm {
+                                    cred_manager_cursor: cur,
+                                    script_idx: Some(script_idx),
+                                };
+                            } else {
+                                let next_key = requires_auth.into_iter()
+                                    .find(|k| credentials::get(k).is_none());
+                                if let Some(k) = next_key {
+                                    app.mode = Mode::CredManagerSaving {
+                                        cred_manager_cursor: cur,
+                                        script_idx: Some(script_idx),
+                                        key: k,
+                                        input: String::new(),
+                                    };
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Char('l') | KeyCode::Char('L') => {
+                        if cur == 0 {
+                            let has_any = credentials::GLOBAL_KEYS.iter()
+                                .any(|&k| credentials::get(k).is_some());
+                            if has_any {
+                                app.mode = Mode::CredManagerClearConfirm {
+                                    cred_manager_cursor: cur,
+                                    script_idx: None,
+                                };
+                            }
+                        } else if let Some(&script_idx) = scripts_with_auth.get(cur - 1) {
+                            let has_any = app.registry[script_idx].manifest.requires_auth.iter()
+                                .any(|k| credentials::get(k).is_some());
+                            if has_any {
+                                app.mode = Mode::CredManagerClearConfirm {
+                                    cred_manager_cursor: cur,
+                                    script_idx: Some(script_idx),
+                                };
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // ── Credential manager — saving ──────────────────────────────────
+            Mode::CredManagerSaving {
+                cred_manager_cursor,
+                script_idx,
+                key: cred_key,
+                input,
+            } => {
+                let cursor_bk = *cred_manager_cursor;
+                let sidx = *script_idx;
+
+                match key.code {
+                    KeyCode::Esc => {
+                        app.mode = Mode::CredManager { cursor: cursor_bk };
+                    }
+                    KeyCode::Backspace => {
+                        input.pop();
+                    }
+                    KeyCode::Char(c) => {
+                        input.push(c);
+                    }
+                    KeyCode::Enter => {
+                        let value = input.clone();
+                        let saved_key = cred_key.clone();
+                        let _ = credentials::set(&saved_key, &value);
+
+                        let next_key = match sidx {
+                            None => {
+                                // Global keys — find next missing one
+                                credentials::GLOBAL_KEYS.iter()
+                                    .find(|&&k| credentials::get(k).is_none())
+                                    .map(|&k| k.to_string())
+                            }
+                            Some(idx) => {
+                                let requires_auth = app.registry[idx].manifest.requires_auth.clone();
+                                requires_auth.into_iter().find(|k| credentials::get(k).is_none())
+                            }
+                        };
+
+                        if let Some(k) = next_key {
+                            app.mode = Mode::CredManagerSaving {
+                                cred_manager_cursor: cursor_bk,
+                                script_idx: sidx,
+                                key: k,
+                                input: String::new(),
+                            };
+                        } else {
+                            app.mode = Mode::CredManager { cursor: cursor_bk };
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // ── Credential manager — clear confirm ───────────────────────────
+            Mode::CredManagerClearConfirm {
+                cred_manager_cursor,
+                script_idx,
+            } => {
+                let cursor_bk = *cred_manager_cursor;
+                let sidx = *script_idx;
+
+                match key.code {
+                    KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Enter => {
+                        let keys_to_clear: Vec<String> = match sidx {
+                            None => credentials::GLOBAL_KEYS
+                                .iter().map(|k| k.to_string()).collect(),
+                            Some(idx) => app.registry[idx].manifest.requires_auth.clone(),
+                        };
+                        credentials::delete_all(&keys_to_clear);
+                        app.mode = Mode::CredManager { cursor: cursor_bk };
+                    }
+                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                        app.mode = Mode::CredManager { cursor: cursor_bk };
+                    }
+                    _ => {}
+                }
             }
 
             Mode::Quit => break,

@@ -67,6 +67,24 @@ pub enum Mode {
     ExecutionResult { exit_code: i32, elapsed_ms: u64 },
     /// Auth error — asking whether to retry.
     AuthErrorPrompt { script_idx: usize },
+    /// Credential management screen.
+    CredManager {
+        cursor: usize,
+    },
+    /// Saving a credential from the credential manager.
+    CredManagerSaving {
+        cred_manager_cursor: usize,
+        /// `None` means saving the agrr global credentials (CHAVE/SENHA).
+        script_idx: Option<usize>,
+        key: String,
+        input: String,
+    },
+    /// Confirming credential deletion from the credential manager.
+    CredManagerClearConfirm {
+        cred_manager_cursor: usize,
+        /// `None` means clearing the agrr global credentials (CHAVE/SENHA).
+        script_idx: Option<usize>,
+    },
     /// Quitting.
     #[allow(dead_code)]
     Quit,
@@ -178,7 +196,24 @@ impl App {
     ) {
         let script = &self.registry[script_idx];
 
-        // First: ensure all required credentials are present
+        // First: ensure global credentials if the script requests them
+        if script.manifest.global_auth {
+            for key in credentials::GLOBAL_KEYS {
+                let key_str = key.to_string();
+                if !pending_creds.contains_key(&key_str) && credentials::get(key).is_none() {
+                    self.mode = Mode::CollectingCred {
+                        script_idx,
+                        key: key_str,
+                        resume_arg_idx: arg_idx,
+                        collected_args,
+                        pending_creds,
+                    };
+                    return;
+                }
+            }
+        }
+
+        // Then: ensure all required script-specific credentials are present
         for key in &script.manifest.requires_auth {
             if !pending_creds.contains_key(key) && credentials::get(key).is_none() {
                 // Need to collect this credential
@@ -240,6 +275,12 @@ impl App {
             ExitStatus::AuthError => {
                 // Delete all stored credentials for this script
                 credentials::delete_all(&self.registry[script_idx].manifest.requires_auth);
+                // Also delete global credentials if this script uses them
+                if self.registry[script_idx].manifest.global_auth {
+                    credentials::delete_all(
+                        &credentials::GLOBAL_KEYS.map(str::to_string),
+                    );
+                }
                 self.mode = Mode::AuthErrorPrompt { script_idx };
             }
         }
@@ -272,6 +313,7 @@ mod tests {
                 args: vec![],
                 requires_auth,
                 runtime: None,
+                global_auth: false,
             },
             resolved_runtime: ResolvedRuntime {
                 executable: PathBuf::from("/usr/bin/python3"),

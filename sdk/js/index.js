@@ -68,6 +68,7 @@ function collectArgs(argSpecs) {
  * @param {string} options.meta.version
  * @param {{ language: 'python'|'node', min_version: string }} [options.meta.runtime]
  * @param {string[]} [options.meta.requires_auth]
+ * @param {boolean} [options.meta.global_auth] - If true, CHAVE and SENHA global credentials are injected.
  * @param {{ name: string, prompt: string, options?: string[] }[]} [options.meta.args]
  * @param {(ctx: { creds: Record<string,string>, args: Record<string,string> }) => Promise<void>|void} options.run
  *
@@ -107,12 +108,20 @@ function createAgrrScript({ meta, run }) {
     if (meta.args && meta.args.length > 0) {
       output.args = meta.args;
     }
+    if (meta.global_auth) {
+      output.global_auth = true;
+    }
     process.stdout.write(JSON.stringify(output) + '\n');
     process.exit(0);
   }
 
   if (argv.includes('--agrr-run')) {
     const creds = collectCreds(meta.requires_auth ?? []);
+    if (meta.global_auth) {
+      for (const key of ['CHAVE', 'SENHA']) {
+        creds[key] = process.env[`AGRR_CRED_${key}`] ?? '';
+      }
+    }
     const args = collectArgs(meta.args ?? []);
 
     Promise.resolve()

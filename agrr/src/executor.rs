@@ -107,6 +107,18 @@ fn build_run_command(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
+    // Inject global credentials when the script requests them
+    if entry.manifest.global_auth {
+        for key in credentials::GLOBAL_KEYS {
+            let env_name = format!("AGRR_CRED_{}", key.to_uppercase());
+            if let Some(val) = extra_creds.get(key) {
+                cmd.env(&env_name, val);
+            } else if let Some(val) = credentials::get(key) {
+                cmd.env(&env_name, val);
+            }
+        }
+    }
+
     // Inject credentials: keychain first, then session-only overrides
     for key in &entry.manifest.requires_auth {
         let env_name = format!("AGRR_CRED_{}", key.to_uppercase());

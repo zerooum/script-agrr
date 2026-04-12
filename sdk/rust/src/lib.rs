@@ -38,6 +38,8 @@ pub struct ScriptMeta {
     pub requires_auth: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<ArgSpec>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub global_auth: bool,
 }
 
 /// Credentials injected by the CLI as `AGRR_CRED_<KEY>` env vars.
@@ -144,7 +146,12 @@ pub fn run_script(script: impl AgrrScript) -> ! {
 
     if cli_args.iter().any(|a| a == "--agrr-run") {
         let meta = script.meta();
-        let creds = Credentials::from_env(&meta.requires_auth);
+        let mut creds = Credentials::from_env(&meta.requires_auth);
+        if meta.global_auth {
+            for key in &["CHAVE", "SENHA"] {
+                creds.keys.push(key.to_string());
+            }
+        }
         let args = Args;
         match script.run(creds, args) {
             Ok(()) => process::exit(0),

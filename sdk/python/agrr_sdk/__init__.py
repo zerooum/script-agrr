@@ -66,6 +66,8 @@ class AgrrScript(ABC):
     requires_auth: list[str] = []
     #: Argument specs: list of {"name", "prompt", "options"?} dicts.
     args: list[dict[str, Any]] = []
+    #: If True, CHAVE and SENHA global credentials are injected as AGRR_CRED_CHAVE / AGRR_CRED_SENHA.
+    global_auth: bool = False
 
     @abstractmethod
     def run(self, creds: dict[str, str], args: dict[str, str]) -> None:
@@ -102,14 +104,20 @@ class AgrrScript(ABC):
             meta["requires_auth"] = cls.requires_auth
         if cls.args:
             meta["args"] = cls.args
+        if cls.global_auth:
+            meta["global_auth"] = True
         return meta
 
     @classmethod
     def _collect_creds(cls) -> dict[str, str]:
-        return {
+        creds = {
             key: os.environ.get(f"AGRR_CRED_{key.upper()}", "")
             for key in cls.requires_auth
         }
+        if cls.global_auth:
+            for key in ("CHAVE", "SENHA"):
+                creds[key] = os.environ.get(f"AGRR_CRED_{key}", "")
+        return creds
 
     @classmethod
     def _collect_args(cls) -> dict[str, str]:

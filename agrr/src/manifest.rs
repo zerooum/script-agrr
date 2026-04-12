@@ -47,6 +47,11 @@ pub struct ScriptManifest {
     /// Arguments collected from the user before execution.
     #[serde(default)]
     pub args: Vec<ArgSpec>,
+    /// If true, the agrr global credentials (CHAVE and SENHA) are collected
+    /// and injected as AGRR_CRED_CHAVE / AGRR_CRED_SENHA before execution.
+    /// These are shared across all scripts that enable this flag.
+    #[serde(default)]
+    pub global_auth: bool,
 }
 
 /// Errors produced when parsing and validating a raw JSON manifest.

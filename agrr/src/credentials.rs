@@ -14,6 +14,13 @@ use rand::RngCore;
 
 const SERVICE: &str = "agrr";
 
+/// Well-known keys for the agrr global credentials (shared across all scripts
+/// that set `global_auth = true` in their manifest).
+///
+/// `CHAVE` corresponds to a login/username (not masked in TUI).
+/// `SENHA` corresponds to a password (masked in TUI).
+pub const GLOBAL_KEYS: [&str; 2] = ["CHAVE", "SENHA"];
+
 // ─── Primary store: OS Keychain ───────────────────────────────────────────────
 
 /// Retrieve a credential by key. Returns `None` if not stored.
