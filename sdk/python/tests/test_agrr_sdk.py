@@ -256,5 +256,37 @@ class TestArgConstraintFields(unittest.TestCase):
         self.assertEqual(collected["tags"].split(","), ["alpha", "rc"])
 
 
+# ─── Run contract validation ───────────────────────────────────────────────────
+
+class TestRunContractValidation(unittest.TestCase):
+    def test_meta_exits_1_when_run_not_implemented(self):
+        """--agrr-meta should exit 1 with an error message if run is not overridden."""
+        class NoRunScript(AgrrScript):
+            name = "NoRun"
+            description = "missing run"
+            group = "g"
+            version = "1.0.0"
+            # run() intentionally NOT implemented
+
+        with patch("sys.argv", ["script.py", "--agrr-meta"]):
+            err = StringIO()
+            with patch("sys.stderr", err):
+                with self.assertRaises(SystemExit) as ctx:
+                    NoRunScript.main()
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("'run' method not implemented", err.getvalue())
+
+    def test_meta_succeeds_when_run_is_implemented(self):
+        """--agrr-meta should exit 0 and emit valid JSON when run is properly overridden."""
+        with patch("sys.argv", ["script.py", "--agrr-meta"]):
+            captured = StringIO()
+            with patch("sys.stdout", captured):
+                with self.assertRaises(SystemExit) as ctx:
+                    GreetScript.main()
+        self.assertEqual(ctx.exception.code, 0)
+        data = json.loads(captured.getvalue().strip())
+        self.assertEqual(data["name"], "Greet")
+
+
 if __name__ == "__main__":
     unittest.main()

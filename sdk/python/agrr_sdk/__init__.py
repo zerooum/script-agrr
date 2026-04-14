@@ -145,6 +145,9 @@ class AgrrScript(ABC):
         argv = sys.argv[1:]
 
         if "--agrr-meta" in argv:
+            if "run" in getattr(cls, "__abstractmethods__", set()):
+                print("agrr-sdk: 'run' method not implemented", file=sys.stderr)
+                sys.exit(1)
             print(json.dumps(cls._build_meta()))
             sys.exit(0)
 

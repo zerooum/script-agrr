@@ -213,3 +213,38 @@ describe('arg constraint fields in meta', () => {
     assert.match(result.stdout, /tags:alpha,rc/);
   });
 });
+
+// ─── Run contract validation ──────────────────────────────────────────────────
+
+describe('run contract validation', () => {
+  const META = { name: 'S', description: 'D', group: 'g', version: '1.0.0' };
+
+  test('--agrr-meta exits 1 when run is not provided', () => {
+    const script = `
+'use strict';
+const { createAgrrScript } = require(${JSON.stringify(SDK_PATH)});
+createAgrrScript({ meta: ${JSON.stringify(META)} });
+`;
+    const result = runScript(script, ['--agrr-meta']);
+    assert.equal(result.status, 1, `Expected exit 1, got ${result.status}: ${result.stdout}`);
+    assert.match(result.stderr, /agrr-sdk: 'run' function not provided/);
+  });
+
+  test('--agrr-meta exits 1 when run is null', () => {
+    const script = `
+'use strict';
+const { createAgrrScript } = require(${JSON.stringify(SDK_PATH)});
+createAgrrScript({ meta: ${JSON.stringify(META)}, run: null });
+`;
+    const result = runScript(script, ['--agrr-meta']);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /agrr-sdk: 'run' function not provided/);
+  });
+
+  test('--agrr-meta exits 0 when run is a valid function', () => {
+    const result = runScript(makeScript(META), ['--agrr-meta']);
+    assert.equal(result.status, 0, `Expected exit 0, got ${result.status}: ${result.stderr}`);
+    const data = JSON.parse(result.stdout.trim());
+    assert.equal(data.name, META.name);
+  });
+});

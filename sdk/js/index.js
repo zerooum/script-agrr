@@ -109,6 +109,11 @@ function collectArgs(argSpecs) {
 function createAgrrScript({ meta, run }) {
   const argv = process.argv.slice(2);
 
+  if (typeof run !== 'function') {
+    process.stderr.write("agrr-sdk: 'run' function not provided\n");
+    process.exit(1);
+  }
+
   if (argv.includes('--agrr-meta')) {
     const output = {
       name: meta.name,
