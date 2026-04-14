@@ -182,48 +182,168 @@ fn handle_search(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
 // ── Arg collection ────────────────────────────────────────────────────────────
 
 fn handle_collecting_args(app: &mut App, key: crossterm::event::KeyEvent) {
-    // Extract needed values in a short-lived borrow (released before app method calls)
-    let (script_idx, arg_idx_val, arg_name, arg_options) = {
-        let Mode::CollectingArgs { script_idx, arg_idx, .. } = &app.mode else { return; };
+    use crate::manifest::{ArgType, Pattern};
+
+    // Extract all needed data in a short-lived borrow
+    let (script_idx, arg_idx_val, arg_name, arg_type, arg_options, arg_max_length,
+         arg_pattern, arg_required, arg_default, current_cursor, current_ms) = {
+        let Mode::CollectingArgs {
+            script_idx, arg_idx, select_cursor, multiselect_selected, ..
+        } = &app.mode else { return; };
         let s = *script_idx;
         let a = *arg_idx;
-        let name = app.registry[s].manifest.args[a].name.clone();
-        let opts = app.registry[s].manifest.args[a].options.clone();
-        (s, a, name, opts)
+        let sc = *select_cursor;
+        let ms = multiselect_selected.clone();
+        let arg = &app.registry[s].manifest.args[a];
+        (s, a, arg.name.clone(), arg.arg_type.clone(),
+         arg.options.clone(), arg.max_length, arg.pattern.clone(),
+         arg.required, arg.default.clone(), sc, ms)
     };
 
-    match key.code {
-        KeyCode::Esc => app.return_to_menu(),
-        KeyCode::Enter => {
-            let value = {
-                let Mode::CollectingArgs { collected, .. } = &app.mode else { return; };
-                collected.get(&arg_name).cloned().unwrap_or_default()
-            };
-            // Validate against options if constrained
-            if !arg_options.is_empty() && !arg_options.iter().any(|o| o == &value) {
-                return; // Invalid option — don't advance
+    match arg_type {
+        ArgType::Text => match key.code {
+            KeyCode::Esc => app.return_to_menu(),
+            KeyCode::Enter => {
+                let value = {
+                    let Mode::CollectingArgs { collected, .. } = &app.mode else { return; };
+                    collected.get(&arg_name).cloned().unwrap_or_default()
+                };
+                // Apply default when blank
+                let final_value = if value.is_empty() {
+                    arg_default.unwrap_or_default()
+                } else {
+                    value
+                };
+                // Enforce required
+                if final_value.is_empty() && arg_required {
+                    if let Mode::CollectingArgs { validation_error, .. } = &mut app.mode {
+                        *validation_error = Some("campo obrigatório".to_string());
+                    }
+                    return;
+                }
+                let (new_collected, new_pending) = {
+                    let Mode::CollectingArgs { collected, pending_creds, .. } = &app.mode else { return; };
+                    let mut nc = collected.clone();
+                    nc.insert(arg_name.clone(), final_value);
+                    (nc, pending_creds.clone())
+                };
+                app.start_arg_or_cred_collection(script_idx, arg_idx_val + 1, new_collected, new_pending);
             }
-            let (new_collected, new_pending) = {
-                let Mode::CollectingArgs { collected, pending_creds, .. } = &app.mode else { return; };
-                let mut nc = collected.clone();
-                nc.insert(arg_name.clone(), value);
-                (nc, pending_creds.clone())
-            };
-            app.start_arg_or_cred_collection(script_idx, arg_idx_val + 1, new_collected, new_pending);
-        }
-        KeyCode::Backspace => {
-            if let Mode::CollectingArgs { collected, .. } = &mut app.mode {
-                if let Some(v) = collected.get_mut(&arg_name) {
-                    v.pop();
+            KeyCode::Backspace => {
+                if let Mode::CollectingArgs { collected, validation_error, .. } = &mut app.mode {
+                    *validation_error = None;
+                    if let Some(v) = collected.get_mut(&arg_name) {
+                        v.pop();
+                    }
                 }
             }
-        }
-        KeyCode::Char(c) => {
-            if let Mode::CollectingArgs { collected, .. } = &mut app.mode {
-                collected.entry(arg_name).or_default().push(c);
+            KeyCode::Char(c) => {
+                // Filter by pattern
+                let allowed = match &arg_pattern {
+                    Some(Pattern::Numeric) => c.is_ascii_digit(),
+                    Some(Pattern::Alpha) => c.is_alphabetic(),
+                    Some(Pattern::Alphanumeric) => c.is_alphanumeric(),
+                    None => true,
+                };
+                if !allowed {
+                    return;
+                }
+                if let Mode::CollectingArgs { collected, validation_error, .. } = &mut app.mode {
+                    let current = collected.entry(arg_name.clone()).or_default();
+                    // Enforce max_length
+                    if let Some(max) = arg_max_length {
+                        if current.chars().count() >= max as usize {
+                            *validation_error = Some(format!("máximo de {} caracteres", max));
+                            return;
+                        }
+                    }
+                    *validation_error = None;
+                    current.push(c);
+                }
             }
-        }
-        _ => {}
+            _ => {}
+        },
+
+        ArgType::Select => match key.code {
+            KeyCode::Esc => app.return_to_menu(),
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Mode::CollectingArgs { select_cursor, validation_error, .. } = &mut app.mode {
+                    *validation_error = None;
+                    if *select_cursor > 0 {
+                        *select_cursor -= 1;
+                    }
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Mode::CollectingArgs { select_cursor, validation_error, .. } = &mut app.mode {
+                    *validation_error = None;
+                    if *select_cursor + 1 < arg_options.len() {
+                        *select_cursor += 1;
+                    }
+                }
+            }
+            KeyCode::Enter => {
+                let selected = arg_options.get(current_cursor).cloned().unwrap_or_default();
+                let (new_collected, new_pending) = {
+                    let Mode::CollectingArgs { collected, pending_creds, .. } = &app.mode else { return; };
+                    let mut nc = collected.clone();
+                    nc.insert(arg_name.clone(), selected);
+                    (nc, pending_creds.clone())
+                };
+                app.start_arg_or_cred_collection(script_idx, arg_idx_val + 1, new_collected, new_pending);
+            }
+            _ => {}
+        },
+
+        ArgType::MultiSelect => match key.code {
+            KeyCode::Esc => app.return_to_menu(),
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Mode::CollectingArgs { select_cursor, validation_error, .. } = &mut app.mode {
+                    *validation_error = None;
+                    if *select_cursor > 0 {
+                        *select_cursor -= 1;
+                    }
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Mode::CollectingArgs { select_cursor, validation_error, .. } = &mut app.mode {
+                    *validation_error = None;
+                    if *select_cursor + 1 < arg_options.len() {
+                        *select_cursor += 1;
+                    }
+                }
+            }
+            KeyCode::Char(' ') => {
+                if let Some(opt) = arg_options.get(current_cursor) {
+                    let opt_str = opt.clone();
+                    if let Mode::CollectingArgs { multiselect_selected, validation_error, .. } = &mut app.mode {
+                        *validation_error = None;
+                        if let Some(pos) = multiselect_selected.iter().position(|s| s == &opt_str) {
+                            multiselect_selected.remove(pos);
+                        } else {
+                            multiselect_selected.push(opt_str);
+                        }
+                    }
+                }
+            }
+            KeyCode::Enter => {
+                if arg_required && current_ms.is_empty() {
+                    if let Mode::CollectingArgs { validation_error, .. } = &mut app.mode {
+                        *validation_error = Some("selecione ao menos uma opção".to_string());
+                    }
+                    return;
+                }
+                let joined = current_ms.join(",");
+                let (new_collected, new_pending) = {
+                    let Mode::CollectingArgs { collected, pending_creds, .. } = &app.mode else { return; };
+                    let mut nc = collected.clone();
+                    nc.insert(arg_name.clone(), joined);
+                    (nc, pending_creds.clone())
+                };
+                app.start_arg_or_cred_collection(script_idx, arg_idx_val + 1, new_collected, new_pending);
+            }
+            _ => {}
+        },
     }
 }
 

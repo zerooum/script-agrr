@@ -14,11 +14,13 @@ class HelloWorld(AgrrScript):
     runtime = {"language": "python", "min_version": "3.8"}
 
     args = [
-        {"name": "nome", "prompt": "Qual é o seu nome?"},
+        {"name": "nome", "prompt": "Qual é o seu nome?", "type": "text"},
         {
             "name": "idioma",
             "prompt": "Idioma?",
+            "type": "select",
             "options": ["pt", "en", "es"],
+            "default": "pt",
         },
     ]
 

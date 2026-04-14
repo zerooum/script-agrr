@@ -17,6 +17,32 @@ pub struct RuntimeRequirement {
     pub min_version: String,
 }
 
+/// Prompt type for an argument.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArgType {
+    /// Free-text input.
+    Text,
+    /// Single-choice from `options` list.
+    Select,
+    /// Multi-choice from `options` list; values injected as comma-separated string.
+    #[serde(rename = "multiselect")]
+    MultiSelect,
+}
+
+/// Character pattern constraint for text arguments.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Pattern {
+    Numeric,
+    Alpha,
+    Alphanumeric,
+}
+
+fn default_required() -> bool {
+    true
+}
+
 /// A single argument the script expects to receive via `AGRR_ARG_*` env vars.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArgSpec {
@@ -24,9 +50,24 @@ pub struct ArgSpec {
     pub name: String,
     /// Human-readable prompt shown to the user before execution.
     pub prompt: String,
-    /// If present, user must choose one of these values.
+    /// Prompt type — required field.
+    #[serde(rename = "type")]
+    pub arg_type: ArgType,
+    /// For `select`/`multiselect`: list of allowed values (≥ 2 required).
     #[serde(default)]
     pub options: Vec<String>,
+    /// Max character count for `text` inputs.
+    #[serde(default)]
+    pub max_length: Option<u32>,
+    /// Character class constraint for `text` inputs.
+    #[serde(default)]
+    pub pattern: Option<Pattern>,
+    /// Whether the field rejects empty input. Defaults to `true`.
+    #[serde(default = "default_required")]
+    pub required: bool,
+    /// Default value used when the user submits blank input (implies optional).
+    #[serde(default)]
+    pub default: Option<String>,
 }
 
 /// Full manifest returned by a script when invoked with `--agrr-meta`.
@@ -75,6 +116,16 @@ pub enum ManifestError {
     EmptyArgPrompt(usize),
     #[error("requires_auth key at index {0} must not be empty")]
     EmptyAuthKey(usize),
+    #[error("arg at index {0}: select/multiselect requires at least 2 options")]
+    InsufficientOptions(usize),
+    #[error("arg at index {0}: text type must not have options")]
+    TextWithOptions(usize),
+    #[error("arg at index {0}: `max_length` and `pattern` are only valid for text type")]
+    ConstraintOnWrongType(usize),
+    #[error("arg at index {0}: default value must be one of the declared options")]
+    InvalidDefaultForSelect(usize),
+    #[error("arg at index {0}: multiselect options must not contain commas")]
+    CommaInMultiselectOption(usize),
 }
 
 impl ScriptManifest {
@@ -115,6 +166,42 @@ impl ScriptManifest {
             }
             if arg.prompt.trim().is_empty() {
                 return Err(ManifestError::EmptyArgPrompt(i));
+            }
+            match arg.arg_type {
+                ArgType::Text => {
+                    if !arg.options.is_empty() {
+                        return Err(ManifestError::TextWithOptions(i));
+                    }
+                }
+                ArgType::Select | ArgType::MultiSelect => {
+                    if arg.options.len() < 2 {
+                        return Err(ManifestError::InsufficientOptions(i));
+                    }
+                    if arg.max_length.is_some() || arg.pattern.is_some() {
+                        return Err(ManifestError::ConstraintOnWrongType(i));
+                    }
+                    if arg.arg_type == ArgType::MultiSelect {
+                        for opt in &arg.options {
+                            if opt.contains(',') {
+                                return Err(ManifestError::CommaInMultiselectOption(i));
+                            }
+                        }
+                    }
+                    if let Some(def) = &arg.default {
+                        if !def.is_empty() {
+                            let parts: Vec<&str> = if arg.arg_type == ArgType::MultiSelect {
+                                def.split(',').collect()
+                            } else {
+                                vec![def.as_str()]
+                            };
+                            for part in parts {
+                                if !arg.options.iter().any(|o| o == part) {
+                                    return Err(ManifestError::InvalidDefaultForSelect(i));
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -195,7 +282,7 @@ mod tests {
 
     #[test]
     fn rejects_empty_arg_name() {
-        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"","prompt":"p"}]}"#;
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"","prompt":"p","type":"text"}]}"#;
         assert!(matches!(
             ScriptManifest::from_json(json),
             Err(ManifestError::EmptyArgName(0))
@@ -224,7 +311,7 @@ mod tests {
             "version": "1.0.0",
             "runtime": {"language": "python", "min_version": "3.11"},
             "requires_auth": ["AWS_USER", "AWS_PASS"],
-            "args": [{"name": "env", "prompt": "Environment?", "options": ["prod", "staging"]}]
+            "args": [{"name": "env", "prompt": "Environment?", "type": "select", "options": ["prod", "staging"]}]
         }"#;
         let m = ScriptManifest::from_json(json).unwrap();
         let rt = m.runtime.unwrap();
@@ -233,4 +320,114 @@ mod tests {
         assert_eq!(m.requires_auth, vec!["AWS_USER", "AWS_PASS"]);
         assert_eq!(m.args[0].options, vec!["prod", "staging"]);
     }
+
+    // ── New arg constraint tests ───────────────────────────────────────────────
+
+    #[test]
+    fn rejects_arg_missing_type() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"x","prompt":"p"}]}"#;
+        assert!(matches!(
+            ScriptManifest::from_json(json),
+            Err(ManifestError::Json(_))
+        ));
+    }
+
+    #[test]
+    fn parses_text_arg() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"q","prompt":"p","type":"text"}]}"#;
+        let m = ScriptManifest::from_json(json).unwrap();
+        assert_eq!(m.args[0].arg_type, ArgType::Text);
+        assert!(m.args[0].required); // default true
+        assert!(m.args[0].default.is_none());
+    }
+
+    #[test]
+    fn parses_text_arg_with_constraints() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"code","prompt":"Code?","type":"text","max_length":6,"pattern":"numeric","required":false,"default":"000"}]}"#;
+        let m = ScriptManifest::from_json(json).unwrap();
+        let arg = &m.args[0];
+        assert_eq!(arg.arg_type, ArgType::Text);
+        assert_eq!(arg.max_length, Some(6));
+        assert_eq!(arg.pattern, Some(Pattern::Numeric));
+        assert!(!arg.required);
+        assert_eq!(arg.default.as_deref(), Some("000"));
+    }
+
+    #[test]
+    fn rejects_text_arg_with_options() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"x","prompt":"p","type":"text","options":["a","b"]}]}"#;
+        assert!(matches!(
+            ScriptManifest::from_json(json),
+            Err(ManifestError::TextWithOptions(0))
+        ));
+    }
+
+    #[test]
+    fn parses_select_arg() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"env","prompt":"Env?","type":"select","options":["prod","staging"]}]}"#;
+        let m = ScriptManifest::from_json(json).unwrap();
+        assert_eq!(m.args[0].arg_type, ArgType::Select);
+        assert_eq!(m.args[0].options, vec!["prod", "staging"]);
+    }
+
+    #[test]
+    fn rejects_select_with_one_option() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"x","prompt":"p","type":"select","options":["only"]}]}"#;
+        assert!(matches!(
+            ScriptManifest::from_json(json),
+            Err(ManifestError::InsufficientOptions(0))
+        ));
+    }
+
+    #[test]
+    fn rejects_select_with_no_options() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"x","prompt":"p","type":"select"}]}"#;
+        assert!(matches!(
+            ScriptManifest::from_json(json),
+            Err(ManifestError::InsufficientOptions(0))
+        ));
+    }
+
+    #[test]
+    fn rejects_select_with_invalid_default() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"x","prompt":"p","type":"select","options":["a","b"],"default":"c"}]}"#;
+        assert!(matches!(
+            ScriptManifest::from_json(json),
+            Err(ManifestError::InvalidDefaultForSelect(0))
+        ));
+    }
+
+    #[test]
+    fn parses_select_with_valid_default() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"x","prompt":"p","type":"select","options":["a","b"],"default":"b"}]}"#;
+        let m = ScriptManifest::from_json(json).unwrap();
+        assert_eq!(m.args[0].default.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn parses_multiselect_arg() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"tags","prompt":"Tags?","type":"multiselect","options":["alpha","beta","gamma"]}]}"#;
+        let m = ScriptManifest::from_json(json).unwrap();
+        assert_eq!(m.args[0].arg_type, ArgType::MultiSelect);
+        assert_eq!(m.args[0].options.len(), 3);
+    }
+
+    #[test]
+    fn rejects_multiselect_with_comma_in_option() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"x","prompt":"p","type":"multiselect","options":["a,b","c"]}]}"#;
+        assert!(matches!(
+            ScriptManifest::from_json(json),
+            Err(ManifestError::CommaInMultiselectOption(0))
+        ));
+    }
+
+    #[test]
+    fn rejects_constraint_on_select_type() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"x","prompt":"p","type":"select","options":["a","b"],"max_length":5}]}"#;
+        assert!(matches!(
+            ScriptManifest::from_json(json),
+            Err(ManifestError::ConstraintOnWrongType(0))
+        ));
+    }
 }
+

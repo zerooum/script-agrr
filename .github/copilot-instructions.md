@@ -53,6 +53,27 @@ AGRR_ARG_<UPPERCASE_NAME>   — arguments
 ### Manifest Required Fields
 `name`, `description`, `group`, `version` — all non-empty strings. `requires_auth`, `args`, `global_auth` are optional. The `runtime` field is accepted but ignored by the CLI (kept for backward compatibility with script manifests).
 
+### Arg Prompt Constraints
+Each entry in `args` **must** include a `type` field (breaking change — manifests without it are rejected):
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `type` | `"text"` \| `"select"` \| `"multiselect"` | *(required)* | Determines TUI input widget |
+| `options` | `string[]` | `[]` | Required for `select`/`multiselect` (≥ 2 items); forbidden for `text` |
+| `max_length` | `number \| null` | `null` | `text` only — caps input length |
+| `pattern` | `"numeric"` \| `"alpha"` \| `"alphanumeric"` \| `null` | `null` | `text` only — filters invalid keystrokes |
+| `required` | `bool` | `true` | If `false`, empty text or zero-selection is allowed |
+| `default` | `string \| null` | `null` | Pre-fills text; selects option by value; comma-separated for multiselect |
+
+**Validation rules** (enforced in `manifest.rs::validate()`):
+- `select`/`multiselect` require `options.len() >= 2`
+- `text` must have empty `options`
+- `max_length` and `pattern` are only valid on `text`
+- `default` for `select` must be one of the declared options
+- `multiselect` options must not contain commas (they're used as delimiters)
+
+**Multiselect env var**: selected values are joined with `,` into a single `AGRR_ARG_<NAME>` env var.
+
 ### Global Credentials (`global_auth`)
 Scripts that set `global_auth: true` in their manifest receive two additional credentials shared across all such scripts:
 

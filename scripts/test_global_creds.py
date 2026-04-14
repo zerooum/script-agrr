@@ -19,6 +19,7 @@ class TestGlobalCreds(AgrrScript):
         {
             "name": "simular_falha",
             "prompt": "Simular falha de autenticação?",
+            "type": "select",
             "options": ["nao", "sim"],
         },
     ]

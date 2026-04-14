@@ -89,7 +89,7 @@ describe('--agrr-meta dispatch', () => {
   });
 
   test('includes args when non-empty', () => {
-    const meta = { ...META, args: [{ name: 'env', prompt: 'Env?', options: ['prod', 'staging'] }] };
+    const meta = { ...META, args: [{ name: 'env', prompt: 'Env?', type: 'select', options: ['prod', 'staging'] }] };
     const result = runScript(makeScript(meta), ['--agrr-meta']);
     const data = JSON.parse(result.stdout.trim());
     assert.equal(data.args[0].name, 'env');
@@ -139,7 +139,7 @@ describe('--agrr-run dispatch', () => {
   test('injects args from AGRR_ARG_* env vars', () => {
     const meta = {
       name: 'S', description: 'D', group: 'g', version: '1.0.0',
-      args: [{ name: 'target', prompt: 'Target?' }],
+      args: [{ name: 'target', prompt: 'Target?', type: 'text' }],
     };
     const body = `process.stdout.write('target:' + args.target);`;
     const result = runScript(makeScript(meta, body), ['--agrr-run'], { AGRR_ARG_TARGET: 'staging' });
@@ -164,5 +164,52 @@ describe('AgrrAuthError', () => {
     const err = new AgrrAuthError();
     assert.ok(err instanceof Error);
     assert.equal(err.name, 'AgrrAuthError');
+  });
+});
+
+// ─── Arg constraint field tests ───────────────────────────────────────────────
+
+describe('arg constraint fields in meta', () => {
+  const BASE = { name: 'S', description: 'D', group: 'g', version: '1.0.0' };
+
+  test('arg type field is serialized to meta JSON', () => {
+    const meta = { ...BASE, args: [{ name: 'x', prompt: 'X?', type: 'text' }] };
+    const result = runScript(makeScript(meta), ['--agrr-meta']);
+    const data = JSON.parse(result.stdout.trim());
+    assert.equal(data.args[0].type, 'text');
+  });
+
+  test('select arg with options is serialized', () => {
+    const meta = { ...BASE, args: [{ name: 'env', prompt: 'Env?', type: 'select', options: ['prod', 'staging'] }] };
+    const result = runScript(makeScript(meta), ['--agrr-meta']);
+    const data = JSON.parse(result.stdout.trim());
+    assert.equal(data.args[0].type, 'select');
+    assert.deepEqual(data.args[0].options, ['prod', 'staging']);
+  });
+
+  test('multiselect arg is serialized', () => {
+    const meta = { ...BASE, args: [{ name: 'tags', prompt: 'Tags?', type: 'multiselect', options: ['a', 'b', 'c'] }] };
+    const result = runScript(makeScript(meta), ['--agrr-meta']);
+    const data = JSON.parse(result.stdout.trim());
+    assert.equal(data.args[0].type, 'multiselect');
+    assert.equal(data.args[0].options.length, 3);
+  });
+
+  test('text arg constraints are serialized', () => {
+    const meta = { ...BASE, args: [{ name: 'code', prompt: 'Code?', type: 'text', max_length: 6, pattern: 'numeric', required: false, default: '000' }] };
+    const result = runScript(makeScript(meta), ['--agrr-meta']);
+    const data = JSON.parse(result.stdout.trim());
+    const arg = data.args[0];
+    assert.equal(arg.max_length, 6);
+    assert.equal(arg.pattern, 'numeric');
+    assert.equal(arg.required, false);
+    assert.equal(arg.default, '000');
+  });
+
+  test('multiselect values arrive comma-separated via env var', () => {
+    const meta = { ...BASE, args: [{ name: 'tags', prompt: 'Tags?', type: 'multiselect', options: ['alpha', 'beta', 'rc'] }] };
+    const body = `process.stdout.write('tags:' + args.tags);`;
+    const result = runScript(makeScript(meta, body), ['--agrr-run'], { AGRR_ARG_TAGS: 'alpha,rc' });
+    assert.match(result.stdout, /tags:alpha,rc/);
   });
 });

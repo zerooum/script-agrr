@@ -42,6 +42,12 @@ pub enum Mode {
         collected: CollectedArgs,
         /// Session-only creds not yet in keychain.
         pending_creds: HashMap<String, String>,
+        /// Cursor for select/multiselect option navigation.
+        select_cursor: usize,
+        /// Currently toggled options for multiselect (before confirmation).
+        multiselect_selected: Vec<String>,
+        /// Inline validation error to display below the input.
+        validation_error: Option<String>,
     },
     /// Collecting a credential value for a specific key.
     CollectingCred {
@@ -231,11 +237,23 @@ impl App {
         // Then: collect args one by one
         let args = &script.manifest.args;
         if arg_idx < args.len() {
+            let arg = &args[arg_idx];
+            // Initialize select cursor: start at default option if set
+            let select_cursor = arg.default.as_deref()
+                .and_then(|def| arg.options.iter().position(|o| o == def))
+                .unwrap_or(0);
+            // Initialize multiselect pre-selection from default (comma-separated)
+            let multiselect_selected: Vec<String> = arg.default.as_deref()
+                .map(|def| def.split(',').map(|s| s.to_string()).filter(|s| !s.is_empty()).collect())
+                .unwrap_or_default();
             self.mode = Mode::CollectingArgs {
                 script_idx,
                 arg_idx,
                 collected: collected_args,
                 pending_creds,
+                select_cursor,
+                multiselect_selected,
+                validation_error: None,
             };
             return;
         }
@@ -299,7 +317,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::manifest::{ArgSpec, ScriptManifest};
+    use crate::manifest::{ArgSpec, ArgType, ScriptManifest};
 
     fn make_entry(name: &str, group: &str, description: &str, requires_auth: Vec<String>) -> ScriptEntry {
         ScriptEntry {
@@ -447,7 +465,12 @@ mod tests {
         entry.manifest.args = vec![ArgSpec {
             name: "target".to_string(),
             prompt: "Enter target:".to_string(),
+            arg_type: ArgType::Text,
             options: vec![],
+            max_length: None,
+            pattern: None,
+            required: true,
+            default: None,
         }];
         let mut app = App::new(vec![entry], vec![]);
         app.begin_execute();

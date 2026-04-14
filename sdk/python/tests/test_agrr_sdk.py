@@ -21,7 +21,7 @@ class GreetScript(AgrrScript):
     group = "demos"
     version = "1.0.0"
     requires_auth = ["API_KEY"]
-    args = [{"name": "user_name", "prompt": "Name?", "options": []}]
+    args = [{"name": "user_name", "prompt": "Name?", "type": "text"}]
 
     def run(self, creds, args):
         if creds.get("API_KEY") == "bad":
@@ -159,7 +159,7 @@ class TestRunDispatch(unittest.TestCase):
             description = "inspects args"
             group = "g"
             version = "1.0.0"
-            args = [{"name": "target", "prompt": "Target?", "options": []}]
+            args = [{"name": "target", "prompt": "Target?", "type": "text"}]
 
             def run(self, creds, args):
                 collected.update(args)
@@ -180,6 +180,80 @@ class TestNoFlagsFallback(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 GreetScript.main()
         self.assertEqual(ctx.exception.code, 1)
+
+
+# ─── Arg constraint field tests ───────────────────────────────────────────────
+
+class TestArgConstraintFields(unittest.TestCase):
+    def _get_meta(self, script_cls):
+        with patch("sys.argv", ["script.py", "--agrr-meta"]):
+            captured = StringIO()
+            with patch("sys.stdout", captured):
+                with self.assertRaises(SystemExit):
+                    script_cls.main()
+        return json.loads(captured.getvalue().strip())
+
+    def test_meta_includes_arg_type(self):
+        class S(AgrrScript):
+            name = "S"; description = "d"; group = "g"; version = "1.0.0"
+            args = [{"name": "x", "prompt": "X?", "type": "text"}]
+            def run(self, creds, args): pass
+
+        data = self._get_meta(S)
+        self.assertEqual(data["args"][0]["type"], "text")
+
+    def test_meta_includes_select_arg_with_options(self):
+        class S(AgrrScript):
+            name = "S"; description = "d"; group = "g"; version = "1.0.0"
+            args = [{"name": "env", "prompt": "Env?", "type": "select", "options": ["prod", "staging"]}]
+            def run(self, creds, args): pass
+
+        data = self._get_meta(S)
+        arg = data["args"][0]
+        self.assertEqual(arg["type"], "select")
+        self.assertEqual(arg["options"], ["prod", "staging"])
+
+    def test_meta_includes_multiselect_arg(self):
+        class S(AgrrScript):
+            name = "S"; description = "d"; group = "g"; version = "1.0.0"
+            args = [{"name": "tags", "prompt": "Tags?", "type": "multiselect", "options": ["a", "b", "c"]}]
+            def run(self, creds, args): pass
+
+        data = self._get_meta(S)
+        self.assertEqual(data["args"][0]["type"], "multiselect")
+        self.assertEqual(len(data["args"][0]["options"]), 3)
+
+    def test_meta_includes_text_constraints(self):
+        class S(AgrrScript):
+            name = "S"; description = "d"; group = "g"; version = "1.0.0"
+            args = [{"name": "code", "prompt": "Code?", "type": "text",
+                     "max_length": 6, "pattern": "numeric",
+                     "required": False, "default": "000"}]
+            def run(self, creds, args): pass
+
+        data = self._get_meta(S)
+        arg = data["args"][0]
+        self.assertEqual(arg["max_length"], 6)
+        self.assertEqual(arg["pattern"], "numeric")
+        self.assertFalse(arg["required"])
+        self.assertEqual(arg["default"], "000")
+
+    def test_multiselect_args_arrive_comma_separated(self):
+        collected = {}
+
+        class S(AgrrScript):
+            name = "S"; description = "d"; group = "g"; version = "1.0.0"
+            args = [{"name": "tags", "prompt": "Tags?", "type": "multiselect",
+                     "options": ["alpha", "beta", "rc"]}]
+            def run(self, creds, args): collected.update(args)
+
+        env = {"AGRR_ARG_TAGS": "alpha,rc"}
+        with patch("sys.argv", ["script.py", "--agrr-run"]):
+            with patch.dict(os.environ, env):
+                with self.assertRaises(SystemExit):
+                    S.main()
+        self.assertEqual(collected.get("tags"), "alpha,rc")
+        self.assertEqual(collected["tags"].split(","), ["alpha", "rc"])
 
 
 if __name__ == "__main__":

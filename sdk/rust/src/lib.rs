@@ -16,13 +16,46 @@ pub struct RuntimeRequirement {
     pub min_version: String,
 }
 
+/// The input type for a script argument.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArgType {
+    Text,
+    Select,
+    #[serde(rename = "multiselect")]
+    MultiSelect,
+}
+
+/// Pattern constraint for text arguments.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Pattern {
+    Numeric,
+    Alpha,
+    Alphanumeric,
+}
+
+fn default_required() -> bool {
+    true
+}
+
 /// A named argument the script expects.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArgSpec {
     pub name: String,
     pub prompt: String,
+    #[serde(rename = "type")]
+    pub arg_type: ArgType,
     #[serde(default)]
     pub options: Vec<String>,
+    #[serde(default)]
+    pub max_length: Option<u32>,
+    #[serde(default)]
+    pub pattern: Option<Pattern>,
+    #[serde(default = "default_required")]
+    pub required: bool,
+    #[serde(default)]
+    pub default: Option<String>,
 }
 
 /// The manifest every agrr script must provide via `--agrr-meta`.
@@ -161,4 +194,89 @@ pub fn run_script(script: impl AgrrScript) -> ! {
 
     eprintln!("agrr-sdk: use --agrr-meta or --agrr-run");
     process::exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text_arg(name: &str) -> ArgSpec {
+        ArgSpec {
+            name: name.into(),
+            prompt: "Prompt?".into(),
+            arg_type: ArgType::Text,
+            options: vec![],
+            max_length: None,
+            pattern: None,
+            required: true,
+            default: None,
+        }
+    }
+
+    #[test]
+    fn argspec_text_serializes_type() {
+        let arg = text_arg("city");
+        let json = serde_json::to_string(&arg).unwrap();
+        assert!(json.contains(r#""type":"text""#));
+    }
+
+    #[test]
+    fn argspec_select_serializes_type_and_options() {
+        let arg = ArgSpec {
+            name: "env".into(),
+            prompt: "Env?".into(),
+            arg_type: ArgType::Select,
+            options: vec!["prod".into(), "staging".into()],
+            max_length: None,
+            pattern: None,
+            required: true,
+            default: None,
+        };
+        let json = serde_json::to_string(&arg).unwrap();
+        assert!(json.contains(r#""type":"select""#));
+        assert!(json.contains("prod"));
+    }
+
+    #[test]
+    fn argspec_multiselect_serializes_as_multiselect() {
+        let arg = ArgSpec {
+            name: "tags".into(),
+            prompt: "Tags?".into(),
+            arg_type: ArgType::MultiSelect,
+            options: vec!["a".into(), "b".into()],
+            max_length: None,
+            pattern: None,
+            required: true,
+            default: None,
+        };
+        let json = serde_json::to_string(&arg).unwrap();
+        assert!(json.contains(r#""type":"multiselect""#));
+    }
+
+    #[test]
+    fn argspec_text_constraints_round_trip() {
+        let arg = ArgSpec {
+            name: "code".into(),
+            prompt: "Code?".into(),
+            arg_type: ArgType::Text,
+            options: vec![],
+            max_length: Some(6),
+            pattern: Some(Pattern::Numeric),
+            required: false,
+            default: Some("000".into()),
+        };
+        let json = serde_json::to_string(&arg).unwrap();
+        let back: ArgSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.max_length, Some(6));
+        assert_eq!(back.pattern, Some(Pattern::Numeric));
+        assert!(!back.required);
+        assert_eq!(back.default.as_deref(), Some("000"));
+    }
+
+    #[test]
+    fn argspec_required_defaults_to_true() {
+        let json = r#"{"name":"x","prompt":"X?","type":"text"}"#;
+        let arg: ArgSpec = serde_json::from_str(json).unwrap();
+        assert!(arg.required);
+    }
 }

@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{App, Mode};
+use crate::manifest::ArgType;
 use super::theme::{TN_FG, TN_MUTED, TN_BLUE, TN_YELLOW, TN_ORANGE, TN_RED, TN_GREEN, is_masked_field};
 use super::layout::centered_rect;
 
@@ -16,6 +17,9 @@ pub(super) fn render_arg_prompt(frame: &mut Frame, app: &App, arg_idx: usize) {
     let Mode::CollectingArgs {
         script_idx,
         collected,
+        select_cursor,
+        multiselect_selected,
+        validation_error,
         ..
     } = &app.mode
     else {
@@ -24,10 +28,9 @@ pub(super) fn render_arg_prompt(frame: &mut Frame, app: &App, arg_idx: usize) {
 
     let script = &app.registry[*script_idx];
     let arg = &script.manifest.args[arg_idx];
-    let current_input = collected.get(&arg.name).map(String::as_str).unwrap_or("");
     let total = script.manifest.args.len();
 
-    let area = centered_rect(65, 50, frame.area());
+    let area = centered_rect(65, 55, frame.area());
     let block = Block::default()
         .title(Span::styled(
             format!("  {}  ", script.manifest.name),
@@ -56,41 +59,115 @@ pub(super) fn render_arg_prompt(frame: &mut Frame, app: &App, arg_idx: usize) {
         Line::from(""),
     ];
 
-    if arg.options.is_empty() {
-        lines.push(Line::from(vec![
-            Span::styled("  > ", Style::default().fg(TN_ORANGE)),
-            Span::styled(
-                format!("{}_", current_input),
-                Style::default().fg(TN_YELLOW),
-            ),
-        ]));
-    } else {
-        for opt in &arg.options {
-            if opt.as_str() == current_input {
+    match &arg.arg_type {
+        ArgType::Text => {
+            let current_input = collected.get(&arg.name).map(String::as_str).unwrap_or("");
+
+            // Hint line for default / constraints
+            let mut hint_parts: Vec<Span> = vec![Span::raw("  ")];
+            if let Some(def) = &arg.default {
+                hint_parts.push(Span::styled(
+                    format!("(padrão: {})  ", def),
+                    Style::default().fg(TN_MUTED).add_modifier(Modifier::ITALIC),
+                ));
+            }
+            if let Some(max) = arg.max_length {
+                hint_parts.push(Span::styled(
+                    format!("max {} chars  ", max),
+                    Style::default().fg(TN_MUTED),
+                ));
+            }
+            if hint_parts.len() > 1 {
+                lines.push(Line::from(hint_parts));
+                lines.push(Line::from(""));
+            }
+
+            lines.push(Line::from(vec![
+                Span::styled("  > ", Style::default().fg(TN_ORANGE)),
+                Span::styled(
+                    format!("{}_", current_input),
+                    Style::default().fg(TN_YELLOW),
+                ),
+            ]));
+
+            if let Some(err) = validation_error {
+                lines.push(Line::from(""));
                 lines.push(Line::from(vec![
-                    Span::styled("  > ", Style::default().fg(TN_BLUE)),
+                    Span::raw("  "),
                     Span::styled(
-                        opt.clone(),
-                        Style::default()
-                            .fg(TN_BLUE)
-                            .add_modifier(Modifier::BOLD),
+                        err.clone(),
+                        Style::default().fg(TN_RED).add_modifier(Modifier::BOLD),
                     ),
-                ]));
-            } else {
-                lines.push(Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled(opt.clone(), Style::default().fg(TN_FG)),
                 ]));
             }
         }
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  > ", Style::default().fg(TN_ORANGE)),
-            Span::styled(
-                format!("{}_", current_input),
-                Style::default().fg(TN_YELLOW),
-            ),
-        ]));
+
+        ArgType::Select => {
+            for (i, opt) in arg.options.iter().enumerate() {
+                if i == *select_cursor {
+                    lines.push(Line::from(vec![
+                        Span::styled("  > ", Style::default().fg(TN_BLUE)),
+                        Span::styled(
+                            opt.clone(),
+                            Style::default().fg(TN_BLUE).add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(opt.clone(), Style::default().fg(TN_FG)),
+                    ]));
+                }
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  ↑↓ navegar  Enter confirmar",
+                Style::default().fg(TN_MUTED).add_modifier(Modifier::ITALIC),
+            )));
+        }
+
+        ArgType::MultiSelect => {
+            for (i, opt) in arg.options.iter().enumerate() {
+                let is_selected = multiselect_selected.iter().any(|s| s == opt);
+                let checkbox = if is_selected { "☑" } else { "☐" };
+                if i == *select_cursor {
+                    lines.push(Line::from(vec![
+                        Span::styled("  > ", Style::default().fg(TN_BLUE)),
+                        Span::styled(
+                            format!("{} {}", checkbox, opt),
+                            Style::default().fg(TN_BLUE).add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(
+                            format!("{} {}", checkbox, opt),
+                            if is_selected {
+                                Style::default().fg(TN_GREEN)
+                            } else {
+                                Style::default().fg(TN_FG)
+                            },
+                        ),
+                    ]));
+                }
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  ↑↓ navegar  Espaço selecionar  Enter confirmar",
+                Style::default().fg(TN_MUTED).add_modifier(Modifier::ITALIC),
+            )));
+            if let Some(err) = validation_error {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        err.clone(),
+                        Style::default().fg(TN_RED).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            }
+        }
     }
 
     frame.render_widget(

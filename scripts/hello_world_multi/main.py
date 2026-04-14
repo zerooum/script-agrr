@@ -24,7 +24,7 @@ class HelloWorldMulti(AgrrScript):
     runtime = {"language": "python", "min_version": "3.8"}
 
     args = [
-        {"name": "name", "prompt": "Name to greet"},
+        {"name": "name", "prompt": "Name to greet", "type": "text"},
     ]
 
     def run(self, creds: dict, args: dict) -> None:

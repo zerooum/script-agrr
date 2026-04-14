@@ -69,7 +69,18 @@ function collectArgs(argSpecs) {
  * @param {{ language: 'python'|'node', min_version: string }} [options.meta.runtime]
  * @param {string[]} [options.meta.requires_auth]
  * @param {boolean} [options.meta.global_auth] - If true, CHAVE and SENHA global credentials are injected.
- * @param {{ name: string, prompt: string, options?: string[] }[]} [options.meta.args]
+ * @param {{
+ *   name: string,
+ *   prompt: string,
+ *   type: 'text'|'select'|'multiselect',
+ *   options?: string[],
+ *   max_length?: number,
+ *   pattern?: 'numeric'|'alpha'|'alphanumeric',
+ *   required?: boolean,
+ *   default?: string
+ * }[]} [options.meta.args] - Arg specs. `type` is required. `select`/`multiselect` require
+ *   `options` with ≥ 2 entries. For `multiselect`, the selected values arrive as a
+ *   comma-separated string in `AGRR_ARG_<NAME>`. `max_length`, `pattern` apply to `text` only.
  * @param {(ctx: { creds: Record<string,string>, args: Record<string,string> }) => Promise<void>|void} options.run
  *
  * @example
@@ -82,10 +93,14 @@ function collectArgs(argSpecs) {
  *     group: 'infra',
  *     version: '1.0.0',
  *     requires_auth: ['AWS_USER', 'AWS_PASS'],
- *     args: [{ name: 'env', prompt: 'Ambiente?', options: ['prod', 'staging'] }],
+ *     args: [
+ *       { name: 'env', prompt: 'Ambiente?', type: 'select', options: ['prod', 'staging'] },
+ *       { name: 'tags', prompt: 'Tags?', type: 'multiselect', options: ['alpha', 'beta', 'rc'] },
+ *     ],
  *   },
  *   async run({ creds, args }) {
- *     if (!await deploy(creds.AWS_USER, creds.AWS_PASS, args.env)) {
+ *     const tags = args.tags ? args.tags.split(',') : [];
+ *     if (!await deploy(creds.AWS_USER, creds.AWS_PASS, args.env, tags)) {
  *       throw new AgrrAuthError();
  *     }
  *   },

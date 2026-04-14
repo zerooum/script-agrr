@@ -12,15 +12,23 @@ class MyScript(AgrrScript):
     version = "1.0.0"
     requires_auth = ["SERVICE_USER", "SERVICE_PASS"]
     args = [
-        {"name": "env", "prompt": "Environment?", "options": ["prod", "staging"]},
+        # Required fields: name, prompt, type ("text", "select", "multiselect")
+        # For select/multiselect: options list with at least 2 entries
+        {"name": "env", "prompt": "Environment?", "type": "select", "options": ["prod", "staging"]},
+        # Optional constraint fields for text args:
+        #   max_length (int), pattern ("numeric"|"alpha"|"alphanumeric"),
+        #   required (bool, default True), default (str)
+        {"name": "code", "prompt": "Code?", "type": "text", "pattern": "numeric", "max_length": 6},
+        # Multiselect: user can pick one or more; values arrive comma-separated
+        {"name": "tags", "prompt": "Tags?", "type": "multiselect", "options": ["alpha", "beta", "rc"]},
     ]
     # For interpreted scripts, declare runtime requirement:
     # runtime = {"language": "python", "min_version": "3.11"}
 
     def run(self, creds: dict, args: dict) -> None:
-        user = creds["SERVICE_USER"]
-        password = creds["SERVICE_PASS"]
-        env = args["env"]
+        env = args["env"]           # "prod" or "staging"
+        code = args["code"]         # numeric string, max 6 chars
+        tags = args["tags"].split(",") if args["tags"] else []
         # ... if login fails:
         # raise AgrrAuthError()
 
@@ -64,7 +72,12 @@ class AgrrScript(ABC):
     runtime: dict[str, str] | None = None
     #: Named credential keys injected as AGRR_CRED_<KEY>.
     requires_auth: list[str] = []
-    #: Argument specs: list of {"name", "prompt", "options"?} dicts.
+    #: Argument specs: list of dicts with required keys ``name``, ``prompt``, ``type``
+    #: (``"text"`` | ``"select"`` | ``"multiselect"``).
+    #: ``select``/``multiselect`` also require ``options`` (list of ≥ 2 strings).
+    #: Optional keys for ``text``: ``max_length`` (int), ``pattern``
+    #: (``"numeric"`` | ``"alpha"`` | ``"alphanumeric"``), ``required`` (bool, default True),
+    #: ``default`` (str). For ``multiselect``, values arrive as a comma-separated string.
     args: list[dict[str, Any]] = []
     #: If True, CHAVE and SENHA global credentials are injected as AGRR_CRED_CHAVE / AGRR_CRED_SENHA.
     global_auth: bool = False

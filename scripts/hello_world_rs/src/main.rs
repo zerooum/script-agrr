@@ -7,7 +7,7 @@
 //!
 //! O binário `main` na raiz da pasta é descoberto automaticamente pelo agrr.
 
-use agrr_script_sdk::{AgrrScript, Args, ArgSpec, AuthError, Credentials, ScriptMeta, run_script};
+use agrr_script_sdk::{AgrrScript, Args, ArgSpec, ArgType, AuthError, Credentials, ScriptMeta, run_script};
 
 struct HelloWorld;
 
@@ -25,12 +25,22 @@ impl AgrrScript for HelloWorld {
                 ArgSpec {
                     name: "nome".into(),
                     prompt: "Qual é o seu nome?".into(),
+                    arg_type: ArgType::Text,
                     options: vec![],
+                    max_length: None,
+                    pattern: None,
+                    required: true,
+                    default: None,
                 },
                 ArgSpec {
                     name: "idioma".into(),
                     prompt: "Idioma da saudação?".into(),
+                    arg_type: ArgType::Select,
                     options: vec!["pt".into(), "en".into(), "es".into()],
+                    max_length: None,
+                    pattern: None,
+                    required: true,
+                    default: Some("pt".into()),
                 },
             ],
         }

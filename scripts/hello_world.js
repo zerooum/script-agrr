@@ -12,11 +12,13 @@ createAgrrScript({
     version: '1.0.0',
     runtime: { language: 'node', min_version: '18' },
     args: [
-      { name: 'nome', prompt: 'Qual é o seu nome?' },
+      { name: 'nome', prompt: 'Qual é o seu nome?', type: 'text' },
       {
         name: 'idioma',
         prompt: 'Idioma da saudação?',
+        type: 'select',
         options: ['pt', 'en', 'es'],
+        default: 'pt',
       },
     ],
   },
