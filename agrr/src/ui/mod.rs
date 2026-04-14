@@ -8,8 +8,8 @@ mod cred_mgr;
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
@@ -49,19 +49,53 @@ pub fn render(frame: &mut Frame, app: &App) {
 
 fn render_warnings(frame: &mut Frame, app: &App, area: Rect) {
     let count = app.warnings.len();
-    let items: Vec<ListItem> = app
-        .warnings
-        .iter()
-        .map(|w| {
-            ListItem::new(Line::from(vec![
-                Span::styled(
-                    "  ⚠  ",
-                    Style::default().fg(TN_YELLOW).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(w.to_string(), Style::default().fg(TN_FG)),
-            ]))
-        })
-        .collect();
+
+    // Pre-wrap text manually: first chunk gets the icon, continuation lines get
+    // spaces matching the icon width so everything aligns nicely.
+    let icon = "  ⚠  ";
+    let icon_width = icon.chars().count();
+    let inner_w = (area.width.saturating_sub(2 + icon_width as u16)) as usize;
+    let indent = " ".repeat(icon_width);
+
+    let mut lines: Vec<Line> = Vec::new();
+    for w in &app.warnings {
+        let text = w.to_string();
+        let text = text.as_str();
+        if inner_w == 0 || text.len() <= inner_w {
+            lines.push(Line::from(vec![
+                Span::styled(icon, Style::default().fg(TN_YELLOW).add_modifier(Modifier::BOLD)),
+                Span::styled(text.to_string(), Style::default().fg(TN_FG)),
+            ]));
+        } else {
+            // Word-wrap the text into chunks
+            let mut chunks: Vec<&str> = Vec::new();
+            let mut start = 0;
+            while start < text.len() {
+                let end = (start + inner_w).min(text.len());
+                // Walk back to last space to avoid splitting words
+                let split = if end < text.len() {
+                    text[start..end].rfind(' ').map(|i| start + i + 1).unwrap_or(end)
+                } else {
+                    end
+                };
+                chunks.push(text[start..split.min(text.len())].trim_end());
+                start = split.min(text.len());
+            }
+            for (i, chunk) in chunks.into_iter().enumerate() {
+                if i == 0 {
+                    lines.push(Line::from(vec![
+                        Span::styled(icon, Style::default().fg(TN_YELLOW).add_modifier(Modifier::BOLD)),
+                        Span::styled(chunk.to_string(), Style::default().fg(TN_FG)),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::raw(indent.clone()),
+                        Span::styled(chunk.to_string(), Style::default().fg(TN_FG)),
+                    ]));
+                }
+            }
+        }
+    }
 
     let title = format!(
         " ⚠  {} aviso{}  —  pressione qualquer tecla para continuar ",
@@ -74,5 +108,10 @@ fn render_warnings(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(TN_YELLOW));
 
-    frame.render_widget(List::new(items).block(block), area);
+    frame.render_widget(
+        Paragraph::new(Text::from(lines))
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
