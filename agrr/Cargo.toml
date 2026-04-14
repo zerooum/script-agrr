@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 description = "Interactive CLI shell that aggregates team scripts with plug-and-play support"
 
+[lib]
+name = "agrr"
+path = "src/lib.rs"
+
 [[bin]]
 name = "agrr"
 path = "src/main.rs"
@@ -27,3 +31,6 @@ pbkdf2 = { version = "0.12", features = ["hmac"] }
 sha2 = "0.10"
 fuzzy-matcher = "0.3"
 dirs = "5"
+
+[dev-dependencies]
+tempfile = "3"

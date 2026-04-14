@@ -1,15 +1,9 @@
-mod app;
-mod credentials;
-mod discovery;
-mod executor;
-mod manifest;
-mod ui;
-
 use std::io;
 use std::path::PathBuf;
 
-use app::{App, Mode};
-use executor::CollectedArgs;
+use agrr::app::{App, Mode};
+use agrr::executor::CollectedArgs;
+use agrr::{credentials, discovery};
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
@@ -77,7 +71,7 @@ async fn run_app(
     let mut app = App::new(scripts, warnings);
 
     loop {
-        terminal.draw(|f| ui::render(f, &app))?;
+        terminal.draw(|f| agrr::render(f, &app))?;
 
         if !event::poll(std::time::Duration::from_millis(100))? {
             continue;
@@ -182,7 +176,7 @@ fn handle_search(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
 // ── Arg collection ────────────────────────────────────────────────────────────
 
 fn handle_collecting_args(app: &mut App, key: crossterm::event::KeyEvent) {
-    use crate::manifest::{ArgType, Pattern};
+    use agrr::manifest::{ArgType, Pattern};
 
     // Extract all needed data in a short-lived borrow
     let (script_idx, arg_idx_val, arg_name, arg_type, arg_options, arg_max_length,
@@ -576,40 +570,10 @@ fn handle_cred_manager_clear(app: &mut App, key: crossterm::event::KeyEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
     fn resolve_scripts_dir_fallback_to_cwd() {
-        // When there is no `scripts/` folder next to the test binary but there
-        // IS one relative to CWD (the workspace root during `cargo test`), the
-        // function must return Path::new("scripts").
-        //
-        // Note: the test binary lives in target/debug/deps/agrr-*, which has no
-        // `scripts/` sibling, so the fallback branch is exercised here.
         let result = resolve_scripts_dir();
-        // The exact path depends on whether CWD has a scripts/ — we just assert
-        // it ends with "scripts" in both branches.
         assert!(result.ends_with("scripts"));
-    }
-
-    #[test]
-    fn resolve_scripts_dir_prefers_exe_sibling() {
-        // Create a temporary directory that mimics the `build/` layout:
-        //   <tmp>/fake_exe  (file, represents the binary)
-        //   <tmp>/scripts/  (directory)
-        //
-        // We cannot override current_exe() at runtime, so we test the helper
-        // logic directly by verifying that a `scripts/` sibling of the exe
-        // path is preferred when it exists.
-        let tmp = std::env::temp_dir().join("agrr_test_resolve");
-        let scripts = tmp.join("scripts");
-        let _ = fs::create_dir_all(&scripts);
-
-        // Simulate: if current_exe().parent() == tmp, candidate = tmp/scripts
-        // We verify the PathBuf construction logic here.
-        let candidate = tmp.join("scripts");
-        assert!(candidate.is_dir());
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 }

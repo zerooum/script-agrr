@@ -107,13 +107,19 @@ pub fn keychain_available() -> bool {
 /// Returns an empty map if the file doesn't exist.
 fn fallback_load(master: &str) -> Result<HashMap<String, String>, CredentialError> {
     let path = fallback_path().ok_or_else(|| CredentialError::Fallback("no config dir".into()))?;
+    fallback_load_from(master, &path)
+}
 
+fn fallback_load_from(
+    master: &str,
+    path: &std::path::Path,
+) -> Result<HashMap<String, String>, CredentialError> {
     if !path.exists() {
         return Ok(HashMap::new());
     }
 
     let data =
-        std::fs::read(&path).map_err(|e| CredentialError::Fallback(e.to_string()))?;
+        std::fs::read(path).map_err(|e| CredentialError::Fallback(e.to_string()))?;
 
     if data.len() < SALT_LEN + NONCE_LEN + 1 {
         return Err(CredentialError::Fallback("arquivo corrompido".into()));
@@ -137,7 +143,14 @@ fn fallback_load(master: &str) -> Result<HashMap<String, String>, CredentialErro
 /// Encrypt and persist the store.
 fn fallback_save(master: &str, store: &HashMap<String, String>) -> Result<(), CredentialError> {
     let path = fallback_path().ok_or_else(|| CredentialError::Fallback("no config dir".into()))?;
+    fallback_save_to(master, store, &path)
+}
 
+fn fallback_save_to(
+    master: &str,
+    store: &HashMap<String, String>,
+    path: &std::path::Path,
+) -> Result<(), CredentialError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| CredentialError::Fallback(e.to_string()))?;
@@ -164,7 +177,7 @@ fn fallback_save(master: &str, store: &HashMap<String, String>) -> Result<(), Cr
     file_data.extend_from_slice(&nonce_bytes);
     file_data.extend_from_slice(&ciphertext);
 
-    std::fs::write(&path, file_data).map_err(|e| CredentialError::Fallback(e.to_string()))
+    std::fs::write(path, file_data).map_err(|e| CredentialError::Fallback(e.to_string()))
 }
 
 fn derive_key(password: &str, salt: &[u8]) -> Key<Aes256Gcm> {
@@ -223,31 +236,68 @@ pub fn build_cred_env(requires_auth: &[String]) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn cred_env_key_format() {
-        // build_cred_env without real keychain — test key-name transformation
-        // directly via the naming logic.
-        let key = "db_pass";
-        let env_name = format!("AGRR_CRED_{}", key.to_uppercase());
-        assert_eq!(env_name, "AGRR_CRED_DB_PASS");
-    }
-
-    #[test]
-    fn cred_env_mixed_case_keys() {
-        for (input, expected) in [
-            ("AWS_KEY", "AGRR_CRED_AWS_KEY"),
-            ("myService", "AGRR_CRED_MYSERVICE"),
-            ("svc_user", "AGRR_CRED_SVC_USER"),
-        ] {
-            let env_name = format!("AGRR_CRED_{}", input.to_uppercase());
-            assert_eq!(env_name, expected);
-        }
-    }
+    use std::collections::HashMap;
 
     #[test]
     fn delete_all_is_safe_with_empty_list() {
         // Must not panic on empty requires_auth
         delete_all(&[]);
+    }
+
+    #[test]
+    fn fallback_roundtrip_save_then_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("creds.enc");
+        let master = "test-master-pw";
+
+        let mut store = HashMap::new();
+        store.insert("AWS_KEY".into(), "AKIAIOSFODNN7EXAMPLE".into());
+        store.insert("AWS_SECRET".into(), "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE".into());
+
+        fallback_save_to(master, &store, &path).unwrap();
+        let loaded = fallback_load_from(master, &path).unwrap();
+
+        assert_eq!(loaded.get("AWS_KEY").unwrap(), "AKIAIOSFODNN7EXAMPLE");
+        assert_eq!(loaded.get("AWS_SECRET").unwrap(), "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE");
+    }
+
+    #[test]
+    fn fallback_wrong_master_fails_to_decrypt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("creds.enc");
+
+        let mut store = HashMap::new();
+        store.insert("KEY".into(), "value".into());
+
+        fallback_save_to("correct-pw", &store, &path).unwrap();
+        let err = fallback_load_from("wrong-pw", &path).unwrap_err();
+
+        assert!(
+            err.to_string().contains("senha mestre incorreta"),
+            "expected master password error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn fallback_load_nonexistent_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("does_not_exist.enc");
+
+        let loaded = fallback_load_from("any-pw", &path).unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn fallback_corrupted_file_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("creds.enc");
+        // Write garbage shorter than SALT + NONCE + 1
+        std::fs::write(&path, b"short").unwrap();
+
+        let err = fallback_load_from("any-pw", &path).unwrap_err();
+        assert!(
+            err.to_string().contains("corrompido"),
+            "expected corrupted file error, got: {err}"
+        );
     }
 }

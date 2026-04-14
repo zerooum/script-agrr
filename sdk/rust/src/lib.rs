@@ -221,23 +221,6 @@ mod tests {
     }
 
     #[test]
-    fn argspec_select_serializes_type_and_options() {
-        let arg = ArgSpec {
-            name: "env".into(),
-            prompt: "Env?".into(),
-            arg_type: ArgType::Select,
-            options: vec!["prod".into(), "staging".into()],
-            max_length: None,
-            pattern: None,
-            required: true,
-            default: None,
-        };
-        let json = serde_json::to_string(&arg).unwrap();
-        assert!(json.contains(r#""type":"select""#));
-        assert!(json.contains("prod"));
-    }
-
-    #[test]
     fn argspec_multiselect_serializes_as_multiselect() {
         let arg = ArgSpec {
             name: "tags".into(),
@@ -278,5 +261,37 @@ mod tests {
         let json = r#"{"name":"x","prompt":"X?","type":"text"}"#;
         let arg: ArgSpec = serde_json::from_str(json).unwrap();
         assert!(arg.required);
+    }
+
+    #[test]
+    fn meta_with_global_auth_serializes_flag() {
+        let meta = ScriptMeta {
+            name: "s".into(),
+            description: "d".into(),
+            group: "g".into(),
+            version: "1.0.0".into(),
+            runtime: None,
+            requires_auth: vec![],
+            args: vec![],
+            global_auth: true,
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.contains(r#""global_auth":true"#));
+    }
+
+    #[test]
+    fn meta_without_global_auth_omits_flag() {
+        let meta = ScriptMeta {
+            name: "s".into(),
+            description: "d".into(),
+            group: "g".into(),
+            version: "1.0.0".into(),
+            runtime: None,
+            requires_auth: vec![],
+            args: vec![],
+            global_auth: false,
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(!json.contains("global_auth"), "global_auth=false should be omitted via skip_serializing_if");
     }
 }

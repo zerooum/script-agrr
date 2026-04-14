@@ -33,3 +33,25 @@ pub(super) fn key(label: &'static str) -> Span<'static> {
 pub(super) fn desc(label: &'static str) -> Span<'static> {
     Span::styled(label, Style::default().fg(TN_MUTED))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn masks_senha_keyword() {
+        assert!(is_masked_field("SENHA"));
+        assert!(is_masked_field("minha_senha"));
+        assert!(is_masked_field("DB_PASSWORD"));
+        assert!(is_masked_field("api_secret"));
+    }
+
+    #[test]
+    fn does_not_mask_login_style_keys() {
+        assert!(!is_masked_field("CHAVE"));
+        assert!(!is_masked_field("USUARIO"));
+        assert!(!is_masked_field("LOGIN"));
+        assert!(!is_masked_field("API_KEY"));
+        assert!(!is_masked_field("TOKEN"));
+    }
+}

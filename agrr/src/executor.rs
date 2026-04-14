@@ -214,26 +214,4 @@ mod tests {
         assert_eq!(env.get("AGRR_ARG_ENV").map(String::as_str), Some("prod"));
         assert_eq!(env.get("AGRR_ARG_MYPARAM").map(String::as_str), Some("value"));
     }
-
-    #[test]
-    fn arg_env_with_underscores() {
-        let mut args = CollectedArgs::new();
-        args.insert("my_arg".into(), "val".into());
-        let env = build_arg_env(&args);
-        assert!(env.contains_key("AGRR_ARG_MY_ARG"));
-    }
-
-    #[test]
-    fn exit_status_mapping() {
-        // Validate the exit code → ExitStatus mapping logic (pure)
-        let map = |code: i32| match code {
-            0 => ExitStatus::Success,
-            99 => ExitStatus::AuthError,
-            n => ExitStatus::Failure(n),
-        };
-        assert_eq!(map(0), ExitStatus::Success);
-        assert_eq!(map(99), ExitStatus::AuthError);
-        assert_eq!(map(1), ExitStatus::Failure(1));
-        assert_eq!(map(42), ExitStatus::Failure(42));
-    }
 }

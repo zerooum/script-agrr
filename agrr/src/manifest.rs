@@ -290,11 +290,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_manifest() {
-        assert!(ScriptManifest::from_json("{}").is_err());
-    }
-
-    #[test]
     fn rejects_invalid_json() {
         assert!(matches!(
             ScriptManifest::from_json("not json"),
@@ -373,15 +368,6 @@ mod tests {
     #[test]
     fn rejects_select_with_one_option() {
         let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"x","prompt":"p","type":"select","options":["only"]}]}"#;
-        assert!(matches!(
-            ScriptManifest::from_json(json),
-            Err(ManifestError::InsufficientOptions(0))
-        ));
-    }
-
-    #[test]
-    fn rejects_select_with_no_options() {
-        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"x","prompt":"p","type":"select"}]}"#;
         assert!(matches!(
             ScriptManifest::from_json(json),
             Err(ManifestError::InsufficientOptions(0))

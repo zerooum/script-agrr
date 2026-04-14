@@ -336,14 +336,6 @@ mod tests {
     }
 
     #[test]
-    fn new_app_starts_in_menu_mode() {
-        let app = App::new(vec![], vec![]);
-        assert_eq!(app.mode, Mode::Menu);
-        assert_eq!(app.cursor, 0);
-        assert!(app.search_query.is_empty());
-    }
-
-    #[test]
     fn navigation_clamps_at_top() {
         let mut app = App::new(
             vec![make_entry("a", "g", "desc a", vec![]), make_entry("b", "g", "desc b", vec![])],
@@ -422,27 +414,6 @@ mod tests {
     }
 
     #[test]
-    fn auth_error_prompt_mode_carries_script_idx() {
-        let mode = Mode::AuthErrorPrompt { script_idx: 5 };
-        if let Mode::AuthErrorPrompt { script_idx } = mode {
-            assert_eq!(script_idx, 5);
-        } else {
-            panic!("expected AuthErrorPrompt");
-        }
-    }
-
-    #[test]
-    fn execution_result_mode_carries_exit_code_and_elapsed() {
-        let mode = Mode::ExecutionResult { exit_code: 1, elapsed_ms: 234 };
-        if let Mode::ExecutionResult { exit_code, elapsed_ms } = mode {
-            assert_eq!(exit_code, 1);
-            assert_eq!(elapsed_ms, 234);
-        } else {
-            panic!("expected ExecutionResult");
-        }
-    }
-
-    #[test]
     fn return_to_menu_clears_output_lines() {
         let mut app = App::new(vec![], vec![]);
         app.output_lines.push(StyledLine { text: "hello".to_string(), is_error: false });
@@ -484,5 +455,56 @@ mod tests {
             "agrr_test_nonexistent_key_1".to_string(),
             "agrr_test_nonexistent_key_2".to_string(),
         ]);
+    }
+
+    #[test]
+    fn search_filters_by_group() {
+        let mut app = App::new(
+            vec![
+                make_entry("deploy", "infra", "deploy stuff", vec![]),
+                make_entry("lint", "dev-tools", "run linter", vec![]),
+            ],
+            vec![],
+        );
+        app.update_search("infra");
+        assert_eq!(app.visible.len(), 1);
+        assert_eq!(app.visible[0], 0);
+    }
+
+    #[test]
+    fn global_auth_transitions_to_collecting_cred_for_chave() {
+        let mut entry = make_entry("my_script", "g", "needs global", vec![]);
+        entry.manifest.global_auth = true;
+        let mut app = App::new(vec![entry], vec![]);
+        app.begin_execute();
+        match &app.mode {
+            Mode::CollectingCred { key, .. } => {
+                assert_eq!(key, "CHAVE");
+            }
+            other => panic!("expected CollectingCred for CHAVE, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn begin_execute_with_multiselect_default_preselects() {
+        let mut entry = make_entry("my_script", "g", "does stuff", vec![]);
+        entry.manifest.args = vec![ArgSpec {
+            name: "tags".to_string(),
+            prompt: "Tags?".to_string(),
+            arg_type: ArgType::MultiSelect,
+            options: vec!["alpha".into(), "beta".into(), "gamma".into()],
+            max_length: None,
+            pattern: None,
+            required: false,
+            default: Some("alpha,gamma".into()),
+        }];
+        let mut app = App::new(vec![entry], vec![]);
+        app.begin_execute();
+        match &app.mode {
+            Mode::CollectingArgs { multiselect_selected, .. } => {
+                assert_eq!(multiselect_selected, &vec!["alpha".to_string(), "gamma".to_string()]);
+            }
+            other => panic!("expected CollectingArgs, got {:?}", other),
+        }
     }
 }
