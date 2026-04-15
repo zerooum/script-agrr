@@ -477,6 +477,10 @@ mod tests {
 
     #[test]
     fn global_auth_transitions_to_collecting_cred_for_chave() {
+        // Ensure global creds are absent so the prompt is triggered
+        for key in credentials::GLOBAL_KEYS {
+            credentials::delete(key);
+        }
         let mut entry = make_entry("my_script", "g", "needs global", vec![]);
         entry.manifest.global_auth = true;
         let mut app = App::new(vec![entry], vec![]);
