@@ -58,6 +58,16 @@ pub struct ArgSpec {
     pub default: Option<String>,
 }
 
+/// A named subcommand the script can expose.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubcommandSpec {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<ArgSpec>,
+}
+
 /// The manifest every agrr script must provide via `--agrr-meta`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScriptMeta {
@@ -73,6 +83,8 @@ pub struct ScriptMeta {
     pub args: Vec<ArgSpec>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub global_auth: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subcommands: Vec<SubcommandSpec>,
 }
 
 /// Credentials injected by the CLI as `AGRR_CRED_<KEY>` env vars.
@@ -131,14 +143,36 @@ pub trait AgrrScript {
     /// Return the script metadata. Used to respond to `--agrr-meta`.
     fn meta(&self) -> ScriptMeta;
 
-    /// Execute the script.
+    /// Execute the script (for scripts without subcommands).
     ///
     /// # Arguments
     /// * `creds` — credentials injected via `AGRR_CRED_*` env vars
     /// * `args`  — arguments injected via `AGRR_ARG_*` env vars
     ///
     /// Return `Err(AuthError)` to signal invalid credentials (exit 99).
-    fn run(&self, creds: Credentials, args: Args) -> Result<(), AuthError>;
+    ///
+    /// Scripts that declare subcommands should leave this unimplemented and
+    /// override [`run_subcommand`](AgrrScript::run_subcommand) instead.
+    fn run(&self, _creds: Credentials, _args: Args) -> Result<(), AuthError> {
+        eprintln!("agrr-sdk: 'run' not implemented");
+        std::process::exit(1);
+    }
+
+    /// Execute a named subcommand.
+    ///
+    /// Override this when the script declares `subcommands` in its [`ScriptMeta`].
+    /// The `subcommand` parameter contains the value of the `AGRR_SUBCOMMAND` env var.
+    ///
+    /// Return `Err(AuthError)` to signal invalid credentials (exit 99).
+    fn run_subcommand(
+        &self,
+        subcommand: &str,
+        _creds: Credentials,
+        _args: Args,
+    ) -> Result<(), AuthError> {
+        eprintln!("agrr-sdk: unknown subcommand '{subcommand}'");
+        std::process::exit(1);
+    }
 }
 
 /// Entry point for a Rust agrr script.
@@ -152,7 +186,8 @@ pub trait AgrrScript {
 /// #         agrr_script_sdk::ScriptMeta {
 /// #             name: "s".into(), description: "d".into(),
 /// #             group: "g".into(), version: "1.0.0".into(),
-/// #             runtime: None, requires_auth: vec![], args: vec![], global_auth: false,
+/// #             runtime: None, requires_auth: vec![], args: vec![],
+/// #             global_auth: false, subcommands: vec![],
 /// #         }
 /// #     }
 /// #     fn run(&self, _: agrr_script_sdk::Credentials, _: agrr_script_sdk::Args)
@@ -186,7 +221,11 @@ pub fn run_script(script: impl AgrrScript) -> ! {
             }
         }
         let args = Args;
-        match script.run(creds, args) {
+        let result = match std::env::var("AGRR_SUBCOMMAND").ok().as_deref() {
+            Some(subcmd) => script.run_subcommand(subcmd, creds, args),
+            None => script.run(creds, args),
+        };
+        match result {
             Ok(()) => process::exit(0),
             Err(AuthError) => process::exit(99),
         }
@@ -274,6 +313,7 @@ mod tests {
             requires_auth: vec![],
             args: vec![],
             global_auth: true,
+            subcommands: vec![],
         };
         let json = serde_json::to_string(&meta).unwrap();
         assert!(json.contains(r#""global_auth":true"#));
@@ -290,8 +330,90 @@ mod tests {
             requires_auth: vec![],
             args: vec![],
             global_auth: false,
+            subcommands: vec![],
         };
         let json = serde_json::to_string(&meta).unwrap();
         assert!(!json.contains("global_auth"), "global_auth=false should be omitted via skip_serializing_if");
+    }
+
+    #[test]
+    fn subcommand_spec_serializes_name_and_description() {
+        let spec = SubcommandSpec {
+            name: "deploy".into(),
+            description: Some("Deploy the app".into()),
+            args: vec![],
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(json.contains(r#""name":"deploy""#));
+        assert!(json.contains(r#""description":"Deploy the app""#));
+    }
+
+    #[test]
+    fn subcommand_spec_omits_description_when_none() {
+        let spec = SubcommandSpec {
+            name: "status".into(),
+            description: None,
+            args: vec![],
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(!json.contains("description"));
+    }
+
+    #[test]
+    fn subcommand_spec_omits_args_when_empty() {
+        let spec = SubcommandSpec {
+            name: "status".into(),
+            description: None,
+            args: vec![],
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(!json.contains("\"args\""));
+    }
+
+    #[test]
+    fn meta_with_subcommands_serializes_array() {
+        let meta = ScriptMeta {
+            name: "s".into(),
+            description: "d".into(),
+            group: "g".into(),
+            version: "1.0.0".into(),
+            runtime: None,
+            requires_auth: vec![],
+            args: vec![],
+            global_auth: false,
+            subcommands: vec![
+                SubcommandSpec {
+                    name: "deploy".into(),
+                    description: Some("Deploy".into()),
+                    args: vec![],
+                },
+                SubcommandSpec {
+                    name: "rollback".into(),
+                    description: None,
+                    args: vec![],
+                },
+            ],
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.contains(r#""subcommands""#));
+        assert!(json.contains("deploy"));
+        assert!(json.contains("rollback"));
+    }
+
+    #[test]
+    fn meta_without_subcommands_omits_field() {
+        let meta = ScriptMeta {
+            name: "s".into(),
+            description: "d".into(),
+            group: "g".into(),
+            version: "1.0.0".into(),
+            runtime: None,
+            requires_auth: vec![],
+            args: vec![],
+            global_auth: false,
+            subcommands: vec![],
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(!json.contains("subcommands"), "empty subcommands should be omitted");
     }
 }

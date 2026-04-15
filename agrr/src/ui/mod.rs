@@ -26,7 +26,12 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     match &app.mode {
         Mode::Menu | Mode::Search => menu::render_menu(frame, app, frame.area()),
-        Mode::CollectingArgs { arg_idx, .. } => prompts::render_arg_prompt(frame, app, *arg_idx),
+        Mode::SelectingSubcommand { cursor, .. } => {
+            prompts::render_subcommand_selection(frame, app, *cursor)
+        }
+        Mode::CollectingArgs { arg_idx, selected_subcommand, .. } => {
+            prompts::render_arg_prompt(frame, app, *arg_idx, selected_subcommand.as_deref())
+        }
         Mode::CollectingCred { key, .. } => prompts::render_cred_prompt(frame, app, key),
         Mode::AskSaveCred { key, .. } => prompts::render_ask_save(frame, app, key),
         Mode::Running => output::render_output(frame, app, None, 0),

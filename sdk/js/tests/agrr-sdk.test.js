@@ -227,7 +227,7 @@ createAgrrScript({ meta: ${JSON.stringify(META)} });
 `;
     const result = runScript(script, ['--agrr-meta']);
     assert.equal(result.status, 1, `Expected exit 1, got ${result.status}: ${result.stdout}`);
-    assert.match(result.stderr, /agrr-sdk: 'run' function not provided/);
+    assert.match(result.stderr, /agrr-sdk: 'run' function or 'subcommands' object not provided/);
   });
 
   test('--agrr-meta exits 1 when run is null', () => {
@@ -238,7 +238,7 @@ createAgrrScript({ meta: ${JSON.stringify(META)}, run: null });
 `;
     const result = runScript(script, ['--agrr-meta']);
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /agrr-sdk: 'run' function not provided/);
+    assert.match(result.stderr, /agrr-sdk: 'run' function or 'subcommands' object not provided/);
   });
 
   test('--agrr-meta exits 0 when run is a valid function', () => {
@@ -246,5 +246,92 @@ createAgrrScript({ meta: ${JSON.stringify(META)}, run: null });
     assert.equal(result.status, 0, `Expected exit 0, got ${result.status}: ${result.stderr}`);
     const data = JSON.parse(result.stdout.trim());
     assert.equal(data.name, META.name);
+  });
+});
+
+// ─── Subcommand support ───────────────────────────────────────────────────────
+
+const SUBCMD_META = {
+  name: 'Deploy',
+  description: 'Deploy or roll back',
+  group: 'infra',
+  version: '1.0.0',
+  subcommands: [
+    { name: 'deploy', description: 'Deploy', args: [{ name: 'env', prompt: 'Env?', type: 'select', options: ['dev', 'prod'] }] },
+    { name: 'rollback', description: 'Rollback' },
+  ],
+};
+
+function makeSubcmdScript(meta) {
+  return `
+'use strict';
+const { createAgrrScript } = require(${JSON.stringify(SDK_PATH)});
+createAgrrScript({
+  meta: ${JSON.stringify(meta)},
+  subcommands: {
+    deploy({ args }) { console.log('DEPLOY:' + args.env); },
+    rollback() { console.log('ROLLBACK'); },
+  },
+});`;
+}
+
+describe('subcommand support', () => {
+  test('--agrr-meta includes subcommands array', () => {
+    const result = runScript(makeSubcmdScript(SUBCMD_META), ['--agrr-meta']);
+    assert.equal(result.status, 0, result.stderr);
+    const data = JSON.parse(result.stdout.trim());
+    assert.ok(Array.isArray(data.subcommands));
+    assert.equal(data.subcommands.length, 2);
+    assert.equal(data.subcommands[0].name, 'deploy');
+    assert.equal(data.subcommands[1].name, 'rollback');
+  });
+
+  test('--agrr-run dispatches to subcommand handler', () => {
+    const result = runScript(makeSubcmdScript(SUBCMD_META), ['--agrr-run'], {
+      AGRR_SUBCOMMAND: 'deploy',
+      AGRR_ARG_ENV: 'prod',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /DEPLOY:prod/);
+  });
+
+  test('--agrr-run dispatches subcommand with no args', () => {
+    const result = runScript(makeSubcmdScript(SUBCMD_META), ['--agrr-run'], {
+      AGRR_SUBCOMMAND: 'rollback',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /ROLLBACK/);
+  });
+
+  test('--agrr-run exits 1 for unknown subcommand', () => {
+    const result = runScript(makeSubcmdScript(SUBCMD_META), ['--agrr-run'], {
+      AGRR_SUBCOMMAND: 'nonexistent',
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /unknown subcommand/);
+  });
+
+  test('--agrr-meta exits 1 when subcommand handler is missing', () => {
+    const script = `
+'use strict';
+const { createAgrrScript } = require(${JSON.stringify(SDK_PATH)});
+createAgrrScript({
+  meta: ${JSON.stringify(SUBCMD_META)},
+  subcommands: {
+    deploy() {},
+    // rollback handler intentionally missing
+  },
+});`;
+    const result = runScript(script, ['--agrr-meta']);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /rollback/);
+  });
+
+  test('--agrr-meta omits subcommands when not declared', () => {
+    const META_NO_SUBCMD = { name: 'S', description: 'D', group: 'g', version: '1.0.0' };
+    const result = runScript(makeScript(META_NO_SUBCMD), ['--agrr-meta']);
+    assert.equal(result.status, 0);
+    const data = JSON.parse(result.stdout.trim());
+    assert.ok(!('subcommands' in data));
   });
 });

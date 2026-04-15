@@ -59,7 +59,7 @@ async fn main() -> io::Result<()> {
 // call &mut self methods on App.
 #[derive(Clone, Copy)]
 enum Which {
-    Menu, Search, Args, Cred, AskSave, Running,
+    Menu, Search, SelectingSubcmd, Args, Cred, AskSave, Running,
     Result, AuthError, CredMgr, CredMgrSaving, CredMgrClear, Quit,
 }
 
@@ -83,26 +83,28 @@ async fn run_app(
 
         // Step 1: determine which handler (immutable borrow, then released)
         let which = match &app.mode {
-            Mode::Menu                      => Which::Menu,
-            Mode::Search                    => Which::Search,
-            Mode::CollectingArgs { .. }     => Which::Args,
-            Mode::CollectingCred { .. }     => Which::Cred,
-            Mode::AskSaveCred { .. }        => Which::AskSave,
-            Mode::Running                   => Which::Running,
-            Mode::ExecutionResult { .. }    => Which::Result,
-            Mode::AuthErrorPrompt { .. }    => Which::AuthError,
-            Mode::CredManager { .. }        => Which::CredMgr,
-            Mode::CredManagerSaving { .. }  => Which::CredMgrSaving,
+            Mode::Menu                          => Which::Menu,
+            Mode::Search                        => Which::Search,
+            Mode::SelectingSubcommand { .. }    => Which::SelectingSubcmd,
+            Mode::CollectingArgs { .. }         => Which::Args,
+            Mode::CollectingCred { .. }         => Which::Cred,
+            Mode::AskSaveCred { .. }            => Which::AskSave,
+            Mode::Running                       => Which::Running,
+            Mode::ExecutionResult { .. }        => Which::Result,
+            Mode::AuthErrorPrompt { .. }        => Which::AuthError,
+            Mode::CredManager { .. }            => Which::CredMgr,
+            Mode::CredManagerSaving { .. }      => Which::CredMgrSaving,
             Mode::CredManagerClearConfirm { .. } => Which::CredMgrClear,
-            Mode::Quit                      => Which::Quit,
+            Mode::Quit                          => Which::Quit,
         };
 
         // Step 2: call handler with full &mut App (borrow released above)
         let quit = match which {
-            Which::Menu        => handle_menu(&mut app, key),
-            Which::Search      => handle_search(&mut app, key),
-            Which::Args        => { handle_collecting_args(&mut app, key); false }
-            Which::Cred        => { handle_collecting_cred(&mut app, key); false }
+            Which::Menu           => handle_menu(&mut app, key),
+            Which::Search         => handle_search(&mut app, key),
+            Which::SelectingSubcmd => { handle_selecting_subcommand(&mut app, key); false }
+            Which::Args           => { handle_collecting_args(&mut app, key); false }
+            Which::Cred           => { handle_collecting_cred(&mut app, key); false }
             Which::AskSave     => { handle_ask_save_cred(&mut app, key); false }
             Which::Running     => false,
             Which::Result      => { app.return_to_menu(); false }
@@ -180,18 +182,21 @@ fn handle_collecting_args(app: &mut App, key: crossterm::event::KeyEvent) {
 
     // Extract all needed data in a short-lived borrow
     let (script_idx, arg_idx_val, arg_name, arg_type, arg_options, arg_max_length,
-         arg_pattern, arg_required, arg_default, current_cursor, current_ms) = {
+         arg_pattern, arg_required, arg_default, current_cursor, current_ms,
+         selected_subcommand) = {
         let Mode::CollectingArgs {
-            script_idx, arg_idx, select_cursor, multiselect_selected, ..
+            script_idx, arg_idx, select_cursor, multiselect_selected,
+            selected_subcommand, ..
         } = &app.mode else { return; };
         let s = *script_idx;
         let a = *arg_idx;
         let sc = *select_cursor;
         let ms = multiselect_selected.clone();
-        let arg = &app.registry[s].manifest.args[a];
-        (s, a, arg.name.clone(), arg.arg_type.clone(),
-         arg.options.clone(), arg.max_length, arg.pattern.clone(),
-         arg.required, arg.default.clone(), sc, ms)
+        let subcmd = selected_subcommand.clone();
+        let arg = app.registry[s].manifest.effective_args(subcmd.as_deref())[a].clone();
+        (s, a, arg.name, arg.arg_type,
+         arg.options, arg.max_length, arg.pattern,
+         arg.required, arg.default, sc, ms, subcmd)
     };
 
     match arg_type {
@@ -221,7 +226,7 @@ fn handle_collecting_args(app: &mut App, key: crossterm::event::KeyEvent) {
                     nc.insert(arg_name.clone(), final_value);
                     (nc, pending_creds.clone())
                 };
-                app.start_arg_or_cred_collection(script_idx, arg_idx_val + 1, new_collected, new_pending);
+                app.start_arg_or_cred_collection(script_idx, arg_idx_val + 1, new_collected, new_pending, selected_subcommand);
             }
             KeyCode::Backspace => {
                 if let Mode::CollectingArgs { collected, validation_error, .. } = &mut app.mode {
@@ -284,7 +289,7 @@ fn handle_collecting_args(app: &mut App, key: crossterm::event::KeyEvent) {
                     nc.insert(arg_name.clone(), selected);
                     (nc, pending_creds.clone())
                 };
-                app.start_arg_or_cred_collection(script_idx, arg_idx_val + 1, new_collected, new_pending);
+                app.start_arg_or_cred_collection(script_idx, arg_idx_val + 1, new_collected, new_pending, selected_subcommand);
             }
             _ => {}
         },
@@ -334,7 +339,7 @@ fn handle_collecting_args(app: &mut App, key: crossterm::event::KeyEvent) {
                     nc.insert(arg_name.clone(), joined);
                     (nc, pending_creds.clone())
                 };
-                app.start_arg_or_cred_collection(script_idx, arg_idx_val + 1, new_collected, new_pending);
+                app.start_arg_or_cred_collection(script_idx, arg_idx_val + 1, new_collected, new_pending, selected_subcommand);
             }
             _ => {}
         },
@@ -344,9 +349,9 @@ fn handle_collecting_args(app: &mut App, key: crossterm::event::KeyEvent) {
 // ── Credential collection ─────────────────────────────────────────────────────
 
 fn handle_collecting_cred(app: &mut App, key: crossterm::event::KeyEvent) {
-    let (script_idx, cred_key_str, resume) = {
-        let Mode::CollectingCred { script_idx, key: cred_key, resume_arg_idx, .. } = &app.mode else { return; };
-        (*script_idx, cred_key.clone(), *resume_arg_idx)
+    let (script_idx, cred_key_str, resume, selected_subcommand) = {
+        let Mode::CollectingCred { script_idx, key: cred_key, resume_arg_idx, selected_subcommand, .. } = &app.mode else { return; };
+        (*script_idx, cred_key.clone(), *resume_arg_idx, selected_subcommand.clone())
     };
 
     // Input is tracked in pending_creds under a __input__<key> sentinel
@@ -369,6 +374,7 @@ fn handle_collecting_cred(app: &mut App, key: crossterm::event::KeyEvent) {
                 resume_arg_idx: resume,
                 collected_args: new_args,
                 pending_creds: new_pending,
+                selected_subcommand,
             };
         }
         KeyCode::Backspace => {
@@ -421,12 +427,13 @@ fn handle_collecting_cred(app: &mut App, key: crossterm::event::KeyEvent) {
 // ── Ask to save credential ────────────────────────────────────────────────────
 
 fn handle_ask_save_cred(app: &mut App, key: crossterm::event::KeyEvent) {
-    let (script_idx, cred_key, value, resume, new_args, new_pending) = {
+    let (script_idx, cred_key, value, resume, new_args, new_pending, selected_subcommand) = {
         let Mode::AskSaveCred {
             script_idx, key: k, value, resume_arg_idx, collected_args, pending_creds,
+            selected_subcommand,
         } = &app.mode else { return; };
         (*script_idx, k.clone(), value.clone(), *resume_arg_idx,
-         collected_args.clone(), pending_creds.clone())
+         collected_args.clone(), pending_creds.clone(), selected_subcommand.clone())
     };
 
     match key.code {
@@ -435,11 +442,45 @@ fn handle_ask_save_cred(app: &mut App, key: crossterm::event::KeyEvent) {
             let _ = credentials::set(&cred_key, &value);
             let mut np = new_pending;
             np.remove(&cred_key); // remove session-only copy since it's now persisted
-            app.start_arg_or_cred_collection(script_idx, resume, new_args, np);
+            app.start_arg_or_cred_collection(script_idx, resume, new_args, np, selected_subcommand);
         }
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
             // Don't save — keep in pending_creds for this session only
-            app.start_arg_or_cred_collection(script_idx, resume, new_args, new_pending);
+            app.start_arg_or_cred_collection(script_idx, resume, new_args, new_pending, selected_subcommand);
+        }
+        _ => {}
+    }
+}
+
+// ── Subcommand selection ──────────────────────────────────────────────────────
+
+fn handle_selecting_subcommand(app: &mut App, key: crossterm::event::KeyEvent) {
+    let (script_idx, cursor, pending_creds) = {
+        let Mode::SelectingSubcommand { script_idx, cursor, pending_creds } = &app.mode else { return; };
+        (*script_idx, *cursor, pending_creds.clone())
+    };
+    let subcommand_count = app.registry[script_idx].manifest.subcommands.len();
+    match key.code {
+        KeyCode::Esc => app.return_to_menu(),
+        KeyCode::Up | KeyCode::Char('k') => {
+            if cursor > 0 {
+                if let Mode::SelectingSubcommand { cursor: c, .. } = &mut app.mode {
+                    *c -= 1;
+                }
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if cursor + 1 < subcommand_count {
+                if let Mode::SelectingSubcommand { cursor: c, .. } = &mut app.mode {
+                    *c += 1;
+                }
+            }
+        }
+        KeyCode::Enter => {
+            let subcommand_name = app.registry[script_idx].manifest.subcommands[cursor].name.clone();
+            app.start_arg_or_cred_collection(
+                script_idx, 0, CollectedArgs::new(), pending_creds, Some(subcommand_name),
+            );
         }
         _ => {}
     }
@@ -448,13 +489,15 @@ fn handle_ask_save_cred(app: &mut App, key: crossterm::event::KeyEvent) {
 // ── Auth error prompt ─────────────────────────────────────────────────────────
 
 fn handle_auth_error(app: &mut App, key: crossterm::event::KeyEvent) {
-    let Mode::AuthErrorPrompt { script_idx } = &app.mode else { return; };
-    let idx = *script_idx;
+    let (idx, selected_subcommand) = {
+        let Mode::AuthErrorPrompt { script_idx, selected_subcommand } = &app.mode else { return; };
+        (*script_idx, selected_subcommand.clone())
+    };
     match key.code {
         KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Enter => {
-            // Retry: restart the whole collection flow
+            // Retry: restart collection but preserve subcommand selection
             app.start_arg_or_cred_collection(
-                idx, 0, CollectedArgs::new(), std::collections::HashMap::new(),
+                idx, 0, CollectedArgs::new(), std::collections::HashMap::new(), selected_subcommand,
             );
         }
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.return_to_menu(),
@@ -648,6 +691,7 @@ mod tests {
                 requires_auth: vec![],
                 runtime: None,
                 global_auth: true,
+                subcommands: vec![],
             },
         }
     }
@@ -668,6 +712,7 @@ mod tests {
             resume_arg_idx: 0,
             collected_args: agrr::executor::CollectedArgs::new(),
             pending_creds: std::collections::HashMap::new(),
+            selected_subcommand: None,
             validation_error: None,
         };
         app
@@ -681,6 +726,7 @@ mod tests {
             resume_arg_idx: 0,
             collected_args: agrr::executor::CollectedArgs::new(),
             pending_creds: std::collections::HashMap::new(),
+            selected_subcommand: None,
             validation_error: None,
         };
         app

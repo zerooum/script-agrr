@@ -288,5 +288,111 @@ class TestRunContractValidation(unittest.TestCase):
         self.assertEqual(data["name"], "Greet")
 
 
+# ─── Subcommand tests ──────────────────────────────────────────────────────────
+
+class DeployScript(AgrrScript):
+    name = "Deploy"
+    description = "Deploy or roll back the app"
+    group = "infra"
+    version = "1.0.0"
+    subcommands = [
+        {
+            "name": "deploy",
+            "description": "Deploy the app",
+            "args": [{"name": "env", "prompt": "Env?", "type": "select", "options": ["dev", "prod"]}],
+        },
+        {
+            "name": "rollback",
+            "description": "Roll back the last deploy",
+        },
+    ]
+
+    def deploy(self, creds, args):
+        print(f"DEPLOY:{args.get('env', '')}")
+
+    def rollback(self, creds, args):
+        print("ROLLBACK")
+
+
+class TestSubcommandDispatch(unittest.TestCase):
+    def test_meta_includes_subcommands(self):
+        """--agrr-meta should include subcommands array when declared."""
+        with patch("sys.argv", ["script.py", "--agrr-meta"]):
+            captured = StringIO()
+            with patch("sys.stdout", captured):
+                with self.assertRaises(SystemExit) as ctx:
+                    DeployScript.main()
+        self.assertEqual(ctx.exception.code, 0)
+        data = json.loads(captured.getvalue().strip())
+        self.assertIn("subcommands", data)
+        names = [s["name"] for s in data["subcommands"]]
+        self.assertIn("deploy", names)
+        self.assertIn("rollback", names)
+
+    def test_meta_omits_subcommands_when_empty(self):
+        """--agrr-meta should omit subcommands key when list is empty."""
+        with patch("sys.argv", ["script.py", "--agrr-meta"]):
+            captured = StringIO()
+            with patch("sys.stdout", captured):
+                with self.assertRaises(SystemExit):
+                    GreetScript.main()
+        data = json.loads(captured.getvalue().strip())
+        self.assertNotIn("subcommands", data)
+
+    def test_run_dispatches_to_subcommand_method(self):
+        """--agrr-run with AGRR_SUBCOMMAND should call the matching method."""
+        env = {"AGRR_SUBCOMMAND": "deploy", "AGRR_ARG_ENV": "prod"}
+        with patch("sys.argv", ["script.py", "--agrr-run"]):
+            with patch.dict(os.environ, env):
+                captured = StringIO()
+                with patch("sys.stdout", captured):
+                    with self.assertRaises(SystemExit) as ctx:
+                        DeployScript.main()
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertIn("DEPLOY:prod", captured.getvalue())
+
+    def test_run_dispatches_subcommand_without_args(self):
+        """Subcommand with no args should dispatch correctly."""
+        env = {"AGRR_SUBCOMMAND": "rollback"}
+        with patch("sys.argv", ["script.py", "--agrr-run"]):
+            with patch.dict(os.environ, env, clear=False):
+                captured = StringIO()
+                with patch("sys.stdout", captured):
+                    with self.assertRaises(SystemExit) as ctx:
+                        DeployScript.main()
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertIn("ROLLBACK", captured.getvalue())
+
+    def test_run_exits_1_for_unknown_subcommand(self):
+        """--agrr-run with unknown AGRR_SUBCOMMAND should exit 1."""
+        env = {"AGRR_SUBCOMMAND": "nonexistent"}
+        with patch("sys.argv", ["script.py", "--agrr-run"]):
+            with patch.dict(os.environ, env):
+                with self.assertRaises(SystemExit) as ctx:
+                    DeployScript.main()
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_meta_exits_1_when_handler_missing(self):
+        """--agrr-meta should exit 1 if a declared subcommand has no handler method."""
+        class BrokenScript(AgrrScript):
+            name = "Broken"
+            description = "Missing handler"
+            group = "g"
+            version = "1.0.0"
+            subcommands = [
+                {"name": "go", "description": "go"},
+                {"name": "stop", "description": "stop"},
+            ]
+            # 'go' and 'stop' methods intentionally missing
+
+        err = StringIO()
+        with patch("sys.argv", ["script.py", "--agrr-meta"]):
+            with patch("sys.stderr", err):
+                with self.assertRaises(SystemExit) as ctx:
+                    BrokenScript.main()
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("'go'", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -292,3 +292,114 @@ async fn single_file_and_folder_coexist_without_conflict() {
     assert_eq!(result.warnings.len(), 0, "Unexpected warnings: {:?}", result.warnings);
     assert_eq!(result.scripts.len(), 2);
 }
+
+// ─── Subcommand integration tests ─────────────────────────────────────────────
+
+fn valid_subcommands_manifest_json() -> &'static str {
+    r#"{"name":"sub_script","version":"1.0.0","description":"A script with subcommands","group":"testing","subcommands":[{"name":"deploy","description":"Deploy to env"},{"name":"rollback"}]}"#
+}
+
+fn args_and_subcommands_manifest_json() -> &'static str {
+    r#"{"name":"conflict_script","version":"1.0.0","description":"Conflicting","group":"testing","args":[{"name":"env","type":"text"}],"subcommands":[{"name":"deploy"},{"name":"rollback"}]}"#
+}
+
+fn single_subcommand_manifest_json() -> &'static str {
+    r#"{"name":"one_sub_script","version":"1.0.0","description":"Only one subcommand","group":"testing","subcommands":[{"name":"deploy"}]}"#
+}
+
+#[tokio::test]
+async fn valid_subcommands_manifest_loads_without_warnings() {
+    let dir = std::env::temp_dir().join("agrr_test_valid_subcommands");
+    fs::create_dir_all(&dir).unwrap();
+    write_python_stub(&dir, "sub_script", valid_subcommands_manifest_json());
+
+    let result = discover(&dir).await;
+    fs::remove_dir_all(&dir).ok();
+
+    if python_not_available(&result) {
+        return;
+    }
+    assert_eq!(result.warnings.len(), 0, "Unexpected warnings: {:?}", result.warnings);
+    assert_eq!(result.scripts.len(), 1);
+    assert_eq!(result.scripts[0].manifest.name, "sub_script");
+    assert_eq!(result.scripts[0].manifest.subcommands.len(), 2);
+    assert_eq!(result.scripts[0].manifest.subcommands[0].name, "deploy");
+    assert_eq!(result.scripts[0].manifest.subcommands[1].name, "rollback");
+}
+
+#[tokio::test]
+async fn manifest_with_args_and_subcommands_produces_warning() {
+    let dir = std::env::temp_dir().join("agrr_test_args_and_subcommands");
+    fs::create_dir_all(&dir).unwrap();
+    write_python_stub(&dir, "conflict_script", args_and_subcommands_manifest_json());
+
+    let result = discover(&dir).await;
+    fs::remove_dir_all(&dir).ok();
+
+    if python_not_available(&result) {
+        return;
+    }
+    assert_eq!(result.scripts.len(), 0, "Conflicting manifest must not be loaded");
+    assert_eq!(result.warnings.len(), 1, "Expected one warning for conflicting manifest");
+}
+
+#[tokio::test]
+async fn manifest_with_single_subcommand_produces_warning() {
+    let dir = std::env::temp_dir().join("agrr_test_single_subcommand");
+    fs::create_dir_all(&dir).unwrap();
+    write_python_stub(&dir, "one_sub_script", single_subcommand_manifest_json());
+
+    let result = discover(&dir).await;
+    fs::remove_dir_all(&dir).ok();
+
+    if python_not_available(&result) {
+        return;
+    }
+    assert_eq!(result.scripts.len(), 0, "Single-subcommand manifest must not be loaded");
+    assert_eq!(result.warnings.len(), 1, "Expected one warning for insufficient subcommands");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn executor_injects_agrr_subcommand_env_var() {
+    use std::os::unix::fs::PermissionsExt;
+    use agrr::executor::{run, CollectedArgs, OutputLine};
+
+    let dir = std::env::temp_dir().join("agrr_test_executor_subcommand");
+    let script_dir = dir.join("env_printer");
+    fs::create_dir_all(&script_dir).unwrap();
+
+    // Build a stub that prints AGRR_SUBCOMMAND on --agrr-run
+    let main_path = script_dir.join("main");
+    let meta = valid_subcommands_manifest_json();
+    let body = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = \"--agrr-meta\" ]; then\n  printf '%s\\n' '{meta}';\n  exit 0\nfi\n\
+         if [ \"$1\" = \"--agrr-run\" ]; then\n  echo \"SUBCMD=$AGRR_SUBCOMMAND\"\n  exit 0\nfi\n",
+        meta = meta
+    );
+    fs::write(&main_path, &body).unwrap();
+    let mut perms = fs::metadata(&main_path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&main_path, perms).unwrap();
+
+    let registry = agrr::discovery::discover(&dir).await;
+
+    assert_eq!(registry.scripts.len(), 1, "Script must be discovered");
+    let entry = &registry.scripts[0];
+
+    let mut lines: Vec<String> = Vec::new();
+    run(entry, &CollectedArgs::new(), &std::collections::HashMap::new(), Some("deploy"), |line| {
+        match line {
+            OutputLine::Stdout(s) | OutputLine::Stderr(s) => lines.push(s),
+        }
+    });
+
+    fs::remove_dir_all(&dir).ok();
+
+    assert!(
+        lines.iter().any(|l| l.contains("SUBCMD=deploy")),
+        "Expected SUBCMD=deploy in output, got: {:?}",
+        lines
+    );
+}

@@ -45,6 +45,7 @@ fn default_required() -> bool {
 
 /// A single argument the script expects to receive via `AGRR_ARG_*` env vars.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+
 pub struct ArgSpec {
     /// Identifier used to build `AGRR_ARG_<NAME>`.
     pub name: String,
@@ -70,6 +71,23 @@ pub struct ArgSpec {
     pub default: Option<String>,
 }
 
+/// A subcommand the script exposes as a named operation.
+///
+/// When a manifest declares `subcommands`, the TUI shows a selection step
+/// before collecting args. The selected subcommand name is injected as
+/// `AGRR_SUBCOMMAND` into the subprocess environment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubcommandSpec {
+    /// Unique identifier — non-empty, no whitespace.
+    pub name: String,
+    /// Optional description shown in the TUI selection list.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Arguments collected for this specific subcommand.
+    #[serde(default)]
+    pub args: Vec<ArgSpec>,
+}
+
 /// Full manifest returned by a script when invoked with `--agrr-meta`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScriptManifest {
@@ -86,6 +104,7 @@ pub struct ScriptManifest {
     #[serde(default)]
     pub requires_auth: Vec<String>,
     /// Arguments collected from the user before execution.
+    /// MUST be empty when `subcommands` is non-empty.
     #[serde(default)]
     pub args: Vec<ArgSpec>,
     /// If true, the agrr global credentials (CHAVE and SENHA) are collected
@@ -93,6 +112,10 @@ pub struct ScriptManifest {
     /// These are shared across all scripts that enable this flag.
     #[serde(default)]
     pub global_auth: bool,
+    /// Named subcommands exposed by this script (≥ 2 when non-empty).
+    /// Mutually exclusive with a non-empty top-level `args`.
+    #[serde(default)]
+    pub subcommands: Vec<SubcommandSpec>,
 }
 
 /// Errors produced when parsing and validating a raw JSON manifest.
@@ -126,6 +149,66 @@ pub enum ManifestError {
     InvalidDefaultForSelect(usize),
     #[error("arg at index {0}: multiselect options must not contain commas")]
     CommaInMultiselectOption(usize),
+    #[error("subcommands requires at least 2 entries")]
+    InsufficientSubcommands,
+    #[error("manifest must not declare both `args` and `subcommands`")]
+    ArgsAndSubcommandsMutuallyExclusive,
+    #[error("subcommand at index {0}: `name` must not be empty")]
+    EmptySubcommandName(usize),
+    #[error("subcommand at index {0}: name must not contain whitespace")]
+    WhitespaceInSubcommandName(usize),
+    #[error("duplicate subcommand name: {0}")]
+    DuplicateSubcommandName(String),
+    #[error("subcommand '{0}': {1}")]
+    SubcommandError(String, String),
+}
+
+/// Validate a single arg spec at position `i`. Extracted to avoid duplication
+/// between top-level args and subcommand args.
+fn validate_arg(i: usize, arg: &ArgSpec) -> Result<(), ManifestError> {
+    if arg.name.trim().is_empty() {
+        return Err(ManifestError::EmptyArgName(i));
+    }
+    if arg.prompt.trim().is_empty() {
+        return Err(ManifestError::EmptyArgPrompt(i));
+    }
+    match arg.arg_type {
+        ArgType::Text => {
+            if !arg.options.is_empty() {
+                return Err(ManifestError::TextWithOptions(i));
+            }
+        }
+        ArgType::Select | ArgType::MultiSelect => {
+            if arg.options.len() < 2 {
+                return Err(ManifestError::InsufficientOptions(i));
+            }
+            if arg.max_length.is_some() || arg.pattern.is_some() {
+                return Err(ManifestError::ConstraintOnWrongType(i));
+            }
+            if arg.arg_type == ArgType::MultiSelect {
+                for opt in &arg.options {
+                    if opt.contains(',') {
+                        return Err(ManifestError::CommaInMultiselectOption(i));
+                    }
+                }
+            }
+            if let Some(def) = &arg.default {
+                if !def.is_empty() {
+                    let parts: Vec<&str> = if arg.arg_type == ArgType::MultiSelect {
+                        def.split(',').collect()
+                    } else {
+                        vec![def.as_str()]
+                    };
+                    for part in parts {
+                        if !arg.options.iter().any(|o| o == part) {
+                            return Err(ManifestError::InvalidDefaultForSelect(i));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 impl ScriptManifest {
@@ -134,6 +217,17 @@ impl ScriptManifest {
         let manifest: ScriptManifest = serde_json::from_str(json)?;
         manifest.validate()?;
         Ok(manifest)
+    }
+
+    /// Returns the effective arg list for a given subcommand name, or the
+    /// top-level `args` when no subcommand is specified.
+    pub fn effective_args(&self, subcommand: Option<&str>) -> &[ArgSpec] {
+        if let Some(name) = subcommand {
+            if let Some(sub) = self.subcommands.iter().find(|s| s.name == name) {
+                return &sub.args;
+            }
+        }
+        &self.args
     }
 
     /// Validate business rules that serde cannot enforce.
@@ -161,49 +255,36 @@ impl ScriptManifest {
             }
         }
         for (i, arg) in self.args.iter().enumerate() {
-            if arg.name.trim().is_empty() {
-                return Err(ManifestError::EmptyArgName(i));
+            validate_arg(i, arg)?;
+        }
+
+        // Subcommand validation
+        if !self.subcommands.is_empty() {
+            if !self.args.is_empty() {
+                return Err(ManifestError::ArgsAndSubcommandsMutuallyExclusive);
             }
-            if arg.prompt.trim().is_empty() {
-                return Err(ManifestError::EmptyArgPrompt(i));
+            if self.subcommands.len() < 2 {
+                return Err(ManifestError::InsufficientSubcommands);
             }
-            match arg.arg_type {
-                ArgType::Text => {
-                    if !arg.options.is_empty() {
-                        return Err(ManifestError::TextWithOptions(i));
-                    }
+            let mut seen_names = std::collections::HashSet::new();
+            for (i, sub) in self.subcommands.iter().enumerate() {
+                if sub.name.trim().is_empty() {
+                    return Err(ManifestError::EmptySubcommandName(i));
                 }
-                ArgType::Select | ArgType::MultiSelect => {
-                    if arg.options.len() < 2 {
-                        return Err(ManifestError::InsufficientOptions(i));
-                    }
-                    if arg.max_length.is_some() || arg.pattern.is_some() {
-                        return Err(ManifestError::ConstraintOnWrongType(i));
-                    }
-                    if arg.arg_type == ArgType::MultiSelect {
-                        for opt in &arg.options {
-                            if opt.contains(',') {
-                                return Err(ManifestError::CommaInMultiselectOption(i));
-                            }
-                        }
-                    }
-                    if let Some(def) = &arg.default {
-                        if !def.is_empty() {
-                            let parts: Vec<&str> = if arg.arg_type == ArgType::MultiSelect {
-                                def.split(',').collect()
-                            } else {
-                                vec![def.as_str()]
-                            };
-                            for part in parts {
-                                if !arg.options.iter().any(|o| o == part) {
-                                    return Err(ManifestError::InvalidDefaultForSelect(i));
-                                }
-                            }
-                        }
-                    }
+                if sub.name.chars().any(|c| c.is_whitespace()) {
+                    return Err(ManifestError::WhitespaceInSubcommandName(i));
+                }
+                if !seen_names.insert(sub.name.as_str()) {
+                    return Err(ManifestError::DuplicateSubcommandName(sub.name.clone()));
+                }
+                for (j, arg) in sub.args.iter().enumerate() {
+                    validate_arg(j, arg).map_err(|e| {
+                        ManifestError::SubcommandError(sub.name.clone(), e.to_string())
+                    })?;
                 }
             }
         }
+
         Ok(())
     }
 }
@@ -414,6 +495,114 @@ mod tests {
             ScriptManifest::from_json(json),
             Err(ManifestError::ConstraintOnWrongType(0))
         ));
+    }
+
+    // ── Subcommand tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn parses_valid_subcommands() {
+        let json = r#"{
+            "name":"n","description":"d","group":"g","version":"1.0.0",
+            "subcommands":[
+                {"name":"deploy","description":"Deploy it","args":[{"name":"env","prompt":"Env?","type":"select","options":["prod","staging"]}]},
+                {"name":"rollback"}
+            ]
+        }"#;
+        let m = ScriptManifest::from_json(json).unwrap();
+        assert_eq!(m.subcommands.len(), 2);
+        assert_eq!(m.subcommands[0].name, "deploy");
+        assert_eq!(m.subcommands[0].description.as_deref(), Some("Deploy it"));
+        assert_eq!(m.subcommands[0].args.len(), 1);
+        assert_eq!(m.subcommands[1].name, "rollback");
+        assert!(m.subcommands[1].description.is_none());
+        assert!(m.subcommands[1].args.is_empty());
+    }
+
+    #[test]
+    fn rejects_single_subcommand() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","subcommands":[{"name":"only"}]}"#;
+        assert!(matches!(
+            ScriptManifest::from_json(json),
+            Err(ManifestError::InsufficientSubcommands)
+        ));
+    }
+
+    #[test]
+    fn rejects_args_and_subcommands_together() {
+        let json = r#"{
+            "name":"n","description":"d","group":"g","version":"1.0.0",
+            "args":[{"name":"x","prompt":"p","type":"text"}],
+            "subcommands":[{"name":"a"},{"name":"b"}]
+        }"#;
+        assert!(matches!(
+            ScriptManifest::from_json(json),
+            Err(ManifestError::ArgsAndSubcommandsMutuallyExclusive)
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_subcommand_name() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","subcommands":[{"name":""},{"name":"b"}]}"#;
+        assert!(matches!(
+            ScriptManifest::from_json(json),
+            Err(ManifestError::EmptySubcommandName(0))
+        ));
+    }
+
+    #[test]
+    fn rejects_subcommand_name_with_whitespace() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","subcommands":[{"name":"run deploy"},{"name":"b"}]}"#;
+        assert!(matches!(
+            ScriptManifest::from_json(json),
+            Err(ManifestError::WhitespaceInSubcommandName(0))
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_subcommand_names() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","subcommands":[{"name":"deploy"},{"name":"deploy"}]}"#;
+        assert!(matches!(
+            ScriptManifest::from_json(json),
+            Err(ManifestError::DuplicateSubcommandName(ref s)) if s == "deploy"
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_arg_in_subcommand() {
+        let json = r#"{
+            "name":"n","description":"d","group":"g","version":"1.0.0",
+            "subcommands":[
+                {"name":"deploy","args":[{"name":"x","prompt":"p","type":"select","options":["only"]}]},
+                {"name":"rollback"}
+            ]
+        }"#;
+        assert!(matches!(
+            ScriptManifest::from_json(json),
+            Err(ManifestError::SubcommandError(ref name, _)) if name == "deploy"
+        ));
+    }
+
+    #[test]
+    fn effective_args_returns_subcommand_args() {
+        let json = r#"{
+            "name":"n","description":"d","group":"g","version":"1.0.0",
+            "subcommands":[
+                {"name":"deploy","args":[{"name":"env","prompt":"Env?","type":"text"}]},
+                {"name":"rollback"}
+            ]
+        }"#;
+        let m = ScriptManifest::from_json(json).unwrap();
+        let args = m.effective_args(Some("deploy"));
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0].name, "env");
+    }
+
+    #[test]
+    fn effective_args_falls_back_to_top_level() {
+        let json = r#"{"name":"n","description":"d","group":"g","version":"1.0.0","args":[{"name":"x","prompt":"p","type":"text"}]}"#;
+        let m = ScriptManifest::from_json(json).unwrap();
+        let args = m.effective_args(None);
+        assert_eq!(args.len(), 1);
     }
 }
 

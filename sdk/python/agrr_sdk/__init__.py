@@ -41,7 +41,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Any
 
 
@@ -81,9 +81,23 @@ class AgrrScript(ABC):
     args: list[dict[str, Any]] = []
     #: If True, CHAVE and SENHA global credentials are injected as AGRR_CRED_CHAVE / AGRR_CRED_SENHA.
     global_auth: bool = False
+    #: Named subcommands. Each entry is a dict with required key ``name`` plus optional
+    #: ``description`` (str) and ``args`` (list of arg spec dicts with the same schema as
+    #: the top-level ``args`` attribute).  When ``subcommands`` is non-empty, the top-level
+    #: ``args`` attribute must be empty (they are mutually exclusive). Provide a method on
+    #: the class with the same name as each subcommand; that method is called instead of
+    #: :meth:`run` when the user selects that subcommand.
+    subcommands: list[dict[str, Any]] = []
 
-    @abstractmethod
     def run(self, creds: dict[str, str], args: dict[str, str]) -> None:
+        """Execute the script.
+
+        When ``subcommands`` is non-empty this method is never called by the
+        dispatcher — implement a method for each subcommand name instead.
+        When there are no subcommands this method is required and must be
+        implemented by every concrete subclass.
+        """
+        raise NotImplementedError  # pragma: no cover
         """Execute the script.
 
         Parameters
@@ -117,6 +131,8 @@ class AgrrScript(ABC):
             meta["requires_auth"] = cls.requires_auth
         if cls.args:
             meta["args"] = cls.args
+        if cls.subcommands:
+            meta["subcommands"] = cls.subcommands
         if cls.global_auth:
             meta["global_auth"] = True
         return meta
@@ -133,10 +149,17 @@ class AgrrScript(ABC):
         return creds
 
     @classmethod
-    def _collect_args(cls) -> dict[str, str]:
+    def _collect_args(cls, subcommand: str | None = None) -> dict[str, str]:
+        if subcommand is not None:
+            subcmd_spec = next(
+                (s for s in cls.subcommands if s["name"] == subcommand), None
+            )
+            arg_specs = subcmd_spec.get("args", []) if subcmd_spec else []
+        else:
+            arg_specs = cls.args
         return {
             arg["name"]: os.environ.get(f"AGRR_ARG_{arg['name'].upper()}", "")
-            for arg in cls.args
+            for arg in arg_specs
         }
 
     @classmethod
@@ -145,16 +168,37 @@ class AgrrScript(ABC):
         argv = sys.argv[1:]
 
         if "--agrr-meta" in argv:
-            if "run" in getattr(cls, "__abstractmethods__", set()):
+            # For scripts without subcommands, run() must be overridden
+            if not cls.subcommands and cls.run is AgrrScript.run:
                 print("agrr-sdk: 'run' method not implemented", file=sys.stderr)
                 sys.exit(1)
+            # Validate handlers exist for each declared subcommand
+            for spec in cls.subcommands:
+                handler_name = spec["name"]
+                if not callable(getattr(cls, handler_name, None)):
+                    print(
+                        f"agrr-sdk: subcommand '{handler_name}' has no matching method",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
             print(json.dumps(cls._build_meta()))
             sys.exit(0)
 
         if "--agrr-run" in argv:
             instance = cls()
+            subcommand = os.environ.get("AGRR_SUBCOMMAND")
             try:
-                instance.run(cls._collect_creds(), cls._collect_args())
+                if subcommand is not None:
+                    handler = getattr(instance, subcommand, None)
+                    if handler is None or not callable(handler):
+                        print(
+                            f"agrr-sdk: unknown subcommand '{subcommand}'",
+                            file=sys.stderr,
+                        )
+                        sys.exit(1)
+                    handler(cls._collect_creds(), cls._collect_args(subcommand))
+                else:
+                    instance.run(cls._collect_creds(), cls._collect_args())
                 sys.exit(0)
             except AgrrAuthError:
                 sys.exit(99)

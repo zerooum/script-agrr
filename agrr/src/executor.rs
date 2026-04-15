@@ -33,10 +33,13 @@ pub type CollectedArgs = HashMap<String, String>;
 ///
 /// `extra_creds` is used for credentials collected during the current session
 /// that have not yet been persisted (i.e., user declined to save).
+///
+/// `subcommand_name` is injected as `AGRR_SUBCOMMAND` when `Some`.
 pub fn run<F>(
     entry: &ScriptEntry,
     collected_args: &CollectedArgs,
     extra_creds: &HashMap<String, String>,
+    subcommand_name: Option<&str>,
     mut on_line: F,
 ) -> ExitStatus
 where
@@ -48,7 +51,7 @@ where
         runtime_info
     )));
 
-    let mut cmd = build_run_command(entry, collected_args, extra_creds);
+    let mut cmd = build_run_command(entry, collected_args, extra_creds, subcommand_name);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -100,11 +103,17 @@ fn build_run_command(
     entry: &ScriptEntry,
     collected_args: &CollectedArgs,
     extra_creds: &HashMap<String, String>,
+    subcommand_name: Option<&str>,
 ) -> Command {
     let mut cmd = interpreter_command(entry);
     cmd.arg("--agrr-run");
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+
+    // Inject selected subcommand name when present
+    if let Some(subcmd) = subcommand_name {
+        cmd.env("AGRR_SUBCOMMAND", subcmd);
+    }
 
     // Inject global credentials when the script requests them
     if entry.manifest.global_auth {

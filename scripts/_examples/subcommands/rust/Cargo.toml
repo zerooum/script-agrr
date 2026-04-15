@@ -1,0 +1,14 @@
+[package]
+name = "example_subcommands"
+version = "1.0.0"
+edition = "2021"
+
+# Keep this example out of the main workspace so it can be built independently.
+[workspace]
+
+[[bin]]
+name = "main"
+path = "src/main.rs"
+
+[dependencies]
+agrr-script-sdk = { path = "../../../../sdk/rust" }

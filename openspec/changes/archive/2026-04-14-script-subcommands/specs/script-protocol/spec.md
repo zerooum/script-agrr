@@ -1,8 +1,5 @@
-# script-protocol Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change agrr-cli. Update Purpose after archive.
-## Requirements
 ### Requirement: Script declares metadata via --agrr-meta
 A script SHALL expose its metadata by accepting the `--agrr-meta` flag and printing a valid JSON object to stdout, then exiting with code 0.
 
@@ -71,19 +68,6 @@ When a script declares subcommands and the user selects one, the CLI SHALL also 
 - **THEN** `AGRR_SUBCOMMAND` is set to the selected subcommand name
 - **THEN** only the selected subcommand's `AGRR_ARG_*` env vars are injected
 
-### Requirement: Script signals auth error with exit code 99
-A script that declares `requires_auth` MUST signal authentication failure by exiting with code 99. This is the only mechanism the CLI uses to detect invalid credentials.
-
-#### Scenario: Authentication failure during execution
-- **WHEN** the script attempts to authenticate with the provided credentials and fails
-- **THEN** the script exits with code 99
-
-#### Scenario: Exit 99 triggers credential removal
-- **WHEN** the CLI receives exit code 99 from a script
-- **THEN** the CLI deletes the stored credentials for that script's `requires_auth` keys from the OS Keychain
-- **THEN** the CLI informs the user: "Credenciais inválidas. As credenciais salvas foram removidas."
-- **THEN** the CLI prompts the user to enter credentials again
-
 ### Requirement: SDKs implement the protocol per language
 Each supported language SHALL have an SDK in the repository that implements the `--agrr-meta` / `--agrr-run` protocol, so script authors interact with a typed abstraction, not raw flags.
 
@@ -111,7 +95,7 @@ Each SDK MUST validate during `--agrr-meta` processing that the `run` implementa
 #### Scenario: JS SDK rejects script without run function
 - **WHEN** `createAgrrScript` is called without a `run` function (undefined, null, or non-function) and without `subcommands` handlers
 - **WHEN** the script is invoked with `--agrr-meta`
-- **THEN** the SDK prints "agrr-sdk: 'run' function or 'subcommands' object not provided" to stderr
+- **THEN** the SDK prints "agrr-sdk: 'run' function not provided" to stderr
 - **THEN** the SDK exits with code 1
 
 #### Scenario: Python SDK accepts valid subclass with run
@@ -123,4 +107,3 @@ Each SDK MUST validate during `--agrr-meta` processing that the `run` implementa
 - **WHEN** `createAgrrScript` is called with a valid `run` function
 - **WHEN** the script is invoked with `--agrr-meta`
 - **THEN** the SDK emits valid metadata and exits with code 0 (no change in behavior)
-

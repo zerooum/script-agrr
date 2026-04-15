@@ -35,6 +35,14 @@ pub enum Mode {
     Menu,
     /// Fuzzy search input active.
     Search,
+    /// Selecting a subcommand before credential/arg collection.
+    SelectingSubcommand {
+        script_idx: usize,
+        /// Cursor position in the subcommand list.
+        cursor: usize,
+        /// Session-only creds carried forward (empty on first entry).
+        pending_creds: HashMap<String, String>,
+    },
     /// Collecting args for the selected script before execution.
     CollectingArgs {
         script_idx: usize,
@@ -42,6 +50,8 @@ pub enum Mode {
         collected: CollectedArgs,
         /// Session-only creds not yet in keychain.
         pending_creds: HashMap<String, String>,
+        /// Selected subcommand name (None for scripts without subcommands).
+        selected_subcommand: Option<String>,
         /// Cursor for select/multiselect option navigation.
         select_cursor: usize,
         /// Currently toggled options for multiselect (before confirmation).
@@ -57,6 +67,8 @@ pub enum Mode {
         resume_arg_idx: usize,
         collected_args: CollectedArgs,
         pending_creds: HashMap<String, String>,
+        /// Selected subcommand name (None for scripts without subcommands).
+        selected_subcommand: Option<String>,
         /// Inline validation error shown below the input.
         validation_error: Option<String>,
     },
@@ -68,13 +80,19 @@ pub enum Mode {
         resume_arg_idx: usize,
         collected_args: CollectedArgs,
         pending_creds: HashMap<String, String>,
+        /// Selected subcommand name (None for scripts without subcommands).
+        selected_subcommand: Option<String>,
     },
     /// Script running — output is streaming in.
     Running,
     /// Execution finished — showing result before returning to menu.
     ExecutionResult { exit_code: i32, elapsed_ms: u64 },
     /// Auth error — asking whether to retry.
-    AuthErrorPrompt { script_idx: usize },
+    AuthErrorPrompt {
+        script_idx: usize,
+        /// Selected subcommand name so the retry flow can restart correctly.
+        selected_subcommand: Option<String>,
+    },
     /// Credential management screen.
     CredManager {
         cursor: usize,
@@ -183,15 +201,26 @@ impl App {
     // ─── Execution entry point ────────────────────────────────────────────────
 
     /// Start the flow for executing the currently selected script.
-    /// This may transition to arg collection, cred collection, or directly
-    /// to running if no args/creds are needed.
+    /// This may transition to subcommand selection, arg collection,
+    /// cred collection, or directly to running.
     pub fn begin_execute(&mut self) {
         let Some(idx) = self.selected_script_idx() else {
             return;
         };
         self.output_lines.clear();
         self.output_scroll = 0;
-        self.start_arg_or_cred_collection(idx, 0, CollectedArgs::new(), HashMap::new());
+
+        // If the script declares subcommands, show subcommand selection first
+        if !self.registry[idx].manifest.subcommands.is_empty() {
+            self.mode = Mode::SelectingSubcommand {
+                script_idx: idx,
+                cursor: 0,
+                pending_creds: HashMap::new(),
+            };
+            return;
+        }
+
+        self.start_arg_or_cred_collection(idx, 0, CollectedArgs::new(), HashMap::new(), None);
     }
 
     /// Determine next step: collect next missing cred, next arg, or execute.
@@ -201,6 +230,7 @@ impl App {
         arg_idx: usize,
         collected_args: CollectedArgs,
         pending_creds: HashMap<String, String>,
+        selected_subcommand: Option<String>,
     ) {
         let script = &self.registry[script_idx];
 
@@ -215,6 +245,7 @@ impl App {
                         resume_arg_idx: arg_idx,
                         collected_args,
                         pending_creds,
+                        selected_subcommand,
                         validation_error: None,
                     };
                     return;
@@ -232,14 +263,15 @@ impl App {
                     resume_arg_idx: arg_idx,
                     collected_args,
                     pending_creds,
+                    selected_subcommand,
                     validation_error: None,
                 };
                 return;
             }
         }
 
-        // Then: collect args one by one
-        let args = &script.manifest.args;
+        // Then: collect args one by one (using effective_args for subcommand awareness)
+        let args = script.manifest.effective_args(selected_subcommand.as_deref()).to_vec();
         if arg_idx < args.len() {
             let arg = &args[arg_idx];
             // Initialize select cursor: start at default option if set
@@ -255,6 +287,7 @@ impl App {
                 arg_idx,
                 collected: collected_args,
                 pending_creds,
+                selected_subcommand,
                 select_cursor,
                 multiselect_selected,
                 validation_error: None,
@@ -263,7 +296,7 @@ impl App {
         }
 
         // All creds and args collected — execute
-        self.execute_script(script_idx, collected_args, pending_creds);
+        self.execute_script(script_idx, collected_args, pending_creds, selected_subcommand);
     }
 
     pub fn execute_script(
@@ -271,18 +304,25 @@ impl App {
         script_idx: usize,
         collected_args: CollectedArgs,
         pending_creds: HashMap<String, String>,
+        selected_subcommand: Option<String>,
     ) {
         self.mode = Mode::Running;
         let entry = &self.registry[script_idx];
         let mut lines: Vec<StyledLine> = Vec::new();
         let start = Instant::now();
 
-        let status = executor::run(entry, &collected_args, &pending_creds, |line| {
-            match line {
-                OutputLine::Stdout(s) => lines.push(StyledLine { text: s, is_error: false }),
-                OutputLine::Stderr(s) => lines.push(StyledLine { text: s, is_error: true }),
-            }
-        });
+        let status = executor::run(
+            entry,
+            &collected_args,
+            &pending_creds,
+            selected_subcommand.as_deref(),
+            |line| {
+                match line {
+                    OutputLine::Stdout(s) => lines.push(StyledLine { text: s, is_error: false }),
+                    OutputLine::Stderr(s) => lines.push(StyledLine { text: s, is_error: true }),
+                }
+            },
+        );
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
         self.output_lines = lines;
@@ -303,7 +343,7 @@ impl App {
                         &credentials::GLOBAL_KEYS.map(str::to_string),
                     );
                 }
-                self.mode = Mode::AuthErrorPrompt { script_idx };
+                self.mode = Mode::AuthErrorPrompt { script_idx, selected_subcommand };
             }
         }
     }
@@ -335,6 +375,7 @@ mod tests {
                 requires_auth,
                 runtime: None,
                 global_auth: false,
+                subcommands: vec![],
             },
         }
     }

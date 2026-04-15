@@ -106,15 +106,28 @@ function collectArgs(argSpecs) {
  *   },
  * });
  */
-function createAgrrScript({ meta, run }) {
+function createAgrrScript({ meta, run, subcommands }) {
   const argv = process.argv.slice(2);
 
-  if (typeof run !== 'function') {
-    process.stderr.write("agrr-sdk: 'run' function not provided\n");
+  // Validate: either run or subcommands must be provided (but not both)
+  const hasRun = typeof run === 'function';
+  const hasSubcmds = subcommands && typeof subcommands === 'object' && Object.keys(subcommands).length > 0;
+
+  if (!hasRun && !hasSubcmds) {
+    process.stderr.write("agrr-sdk: 'run' function or 'subcommands' object not provided\n");
     process.exit(1);
   }
 
   if (argv.includes('--agrr-meta')) {
+    // Validate subcommand handlers
+    if (meta.subcommands && meta.subcommands.length > 0) {
+      for (const spec of meta.subcommands) {
+        if (typeof (subcommands && subcommands[spec.name]) !== 'function') {
+          process.stderr.write(`agrr-sdk: subcommand '${spec.name}' has no matching handler\n`);
+          process.exit(1);
+        }
+      }
+    }
     const output = {
       name: meta.name,
       description: meta.description,
@@ -127,6 +140,9 @@ function createAgrrScript({ meta, run }) {
     }
     if (meta.args && meta.args.length > 0) {
       output.args = meta.args;
+    }
+    if (meta.subcommands && meta.subcommands.length > 0) {
+      output.subcommands = meta.subcommands;
     }
     if (meta.global_auth) {
       output.global_auth = true;
@@ -142,10 +158,28 @@ function createAgrrScript({ meta, run }) {
         creds[key] = process.env[`AGRR_CRED_${key}`] ?? '';
       }
     }
-    const args = collectArgs(meta.args ?? []);
+
+    const subcommandName = process.env.AGRR_SUBCOMMAND;
+    let handler;
+    let argSpecs;
+
+    if (subcommandName !== undefined) {
+      handler = subcommands && subcommands[subcommandName];
+      if (typeof handler !== 'function') {
+        console.error(`agrr-sdk: unknown subcommand '${subcommandName}'`);
+        process.exit(1);
+      }
+      const subcmdSpec = (meta.subcommands ?? []).find(s => s.name === subcommandName);
+      argSpecs = subcmdSpec ? (subcmdSpec.args ?? []) : [];
+    } else {
+      handler = run;
+      argSpecs = meta.args ?? [];
+    }
+
+    const args = collectArgs(argSpecs);
 
     Promise.resolve()
-      .then(() => run({ creds, args }))
+      .then(() => handler({ creds, args }))
       .then(() => {
         process.exit(0);
       })
