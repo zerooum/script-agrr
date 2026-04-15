@@ -12,6 +12,8 @@ use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use rand::RngCore;
 
+use crate::manifest::Pattern;
+
 const SERVICE: &str = "agrr";
 
 /// Well-known keys for the agrr global credentials (shared across all scripts
@@ -20,6 +22,24 @@ const SERVICE: &str = "agrr";
 /// `CHAVE` corresponds to a login/username (not masked in TUI).
 /// `SENHA` corresponds to a password (masked in TUI).
 pub const GLOBAL_KEYS: [&str; 2] = ["CHAVE", "SENHA"];
+
+/// Input constraints for a global credential field.
+pub struct GlobalCredConstraint {
+    pub max_length: u32,
+    pub pattern: Option<Pattern>,
+}
+
+/// Returns the hardcoded input constraints for a global credential key, if any.
+///
+/// - `CHAVE`: max 8 characters, no pattern restriction
+/// - `SENHA`: max 8 characters, digits only
+pub fn global_cred_constraint(key: &str) -> Option<GlobalCredConstraint> {
+    match key {
+        "CHAVE" => Some(GlobalCredConstraint { max_length: 8, pattern: None }),
+        "SENHA" => Some(GlobalCredConstraint { max_length: 8, pattern: Some(Pattern::Numeric) }),
+        _ => None,
+    }
+}
 
 // ─── Primary store: OS Keychain ───────────────────────────────────────────────
 
@@ -299,5 +319,27 @@ mod tests {
             err.to_string().contains("corrompido"),
             "expected corrupted file error, got: {err}"
         );
+    }
+
+    #[test]
+    fn global_cred_constraint_chave_max_8_no_pattern() {
+        let con = global_cred_constraint("CHAVE").expect("CHAVE should have a constraint");
+        assert_eq!(con.max_length, 8);
+        assert!(con.pattern.is_none(), "CHAVE should not have a pattern restriction");
+    }
+
+    #[test]
+    fn global_cred_constraint_senha_max_8_numeric() {
+        use crate::manifest::Pattern;
+        let con = global_cred_constraint("SENHA").expect("SENHA should have a constraint");
+        assert_eq!(con.max_length, 8);
+        assert_eq!(con.pattern, Some(Pattern::Numeric));
+    }
+
+    #[test]
+    fn global_cred_constraint_unknown_key_returns_none() {
+        assert!(global_cred_constraint("UNKNOWN_KEY").is_none());
+        assert!(global_cred_constraint("USUARIO").is_none());
+        assert!(global_cred_constraint("DB_PASS").is_none());
     }
 }

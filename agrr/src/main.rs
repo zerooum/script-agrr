@@ -373,16 +373,45 @@ fn handle_collecting_cred(app: &mut App, key: crossterm::event::KeyEvent) {
         }
         KeyCode::Backspace => {
             let input_key = format!("__input__{}", cred_key_str);
-            if let Mode::CollectingCred { pending_creds, .. } = &mut app.mode {
+            if let Mode::CollectingCred { pending_creds, validation_error, .. } = &mut app.mode {
+                *validation_error = None;
                 if let Some(v) = pending_creds.get_mut(&input_key) {
                     v.pop();
                 }
             }
         }
         KeyCode::Char(c) => {
+            use agrr::manifest::Pattern;
             let input_key = format!("__input__{}", cred_key_str);
-            if let Mode::CollectingCred { pending_creds, .. } = &mut app.mode {
-                pending_creds.entry(input_key).or_default().push(c);
+            let constraint = agrr::credentials::global_cred_constraint(&cred_key_str);
+
+            // Check pattern constraint
+            if let Some(ref con) = constraint {
+                let allowed = match &con.pattern {
+                    Some(Pattern::Numeric) => c.is_ascii_digit(),
+                    Some(Pattern::Alpha) => c.is_alphabetic(),
+                    Some(Pattern::Alphanumeric) => c.is_alphanumeric(),
+                    None => true,
+                };
+                if !allowed {
+                    if let Mode::CollectingCred { validation_error, .. } = &mut app.mode {
+                        *validation_error = Some("apenas dígitos permitidos".to_string());
+                    }
+                    return;
+                }
+            }
+
+            if let Mode::CollectingCred { pending_creds, validation_error, .. } = &mut app.mode {
+                let current = pending_creds.entry(input_key).or_default();
+                // Check max_length constraint
+                if let Some(ref con) = constraint {
+                    if current.chars().count() >= con.max_length as usize {
+                        *validation_error = Some(format!("máximo de {} caracteres", con.max_length));
+                        return;
+                    }
+                }
+                *validation_error = None;
+                current.push(c);
             }
         }
         _ => {}
@@ -510,6 +539,31 @@ fn handle_cred_manager_saving(app: &mut App, key: crossterm::event::KeyEvent) {
             }
         }
         KeyCode::Char(c) => {
+            use agrr::manifest::Pattern;
+            // For global creds (script_idx == None), enforce hardcoded constraints
+            if sidx.is_none() {
+                let key_name = {
+                    let Mode::CredManagerSaving { key: k, .. } = &app.mode else { return; };
+                    k.clone()
+                };
+                let constraint = agrr::credentials::global_cred_constraint(&key_name);
+                if let Some(ref con) = constraint {
+                    let allowed = match &con.pattern {
+                        Some(Pattern::Numeric) => c.is_ascii_digit(),
+                        Some(Pattern::Alpha) => c.is_alphabetic(),
+                        Some(Pattern::Alphanumeric) => c.is_alphanumeric(),
+                        None => true,
+                    };
+                    if !allowed {
+                        return;
+                    }
+                    if let Mode::CredManagerSaving { input, .. } = &mut app.mode {
+                        if input.chars().count() >= con.max_length as usize {
+                            return;
+                        }
+                    }
+                }
+            }
             if let Mode::CredManagerSaving { input, .. } = &mut app.mode {
                 input.push(c);
             }
@@ -570,10 +624,143 @@ fn handle_cred_manager_clear(app: &mut App, key: crossterm::event::KeyEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use agrr::app::{App, Mode};
+    use agrr::discovery::ScriptEntry;
+    use agrr::manifest::ScriptManifest;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
     fn resolve_scripts_dir_fallback_to_cwd() {
         let result = resolve_scripts_dir();
         assert!(result.ends_with("scripts"));
+    }
+
+    fn make_global_auth_entry() -> ScriptEntry {
+        ScriptEntry {
+            path: PathBuf::from("/tmp/test.py"),
+            manifest: ScriptManifest {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: "test".to_string(),
+                group: "test".to_string(),
+                args: vec![],
+                requires_auth: vec![],
+                runtime: None,
+                global_auth: true,
+            },
+        }
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn app_collecting_senha() -> App {
+        let mut app = App::new(vec![make_global_auth_entry()], vec![]);
+        app.begin_execute();
+        // After begin_execute with global_auth, should be in CollectingCred for CHAVE
+        // Simulate CHAVE already collected, move to SENHA
+        // Set mode directly to SENHA collection
+        app.mode = Mode::CollectingCred {
+            script_idx: 0,
+            key: "SENHA".to_string(),
+            resume_arg_idx: 0,
+            collected_args: agrr::executor::CollectedArgs::new(),
+            pending_creds: std::collections::HashMap::new(),
+            validation_error: None,
+        };
+        app
+    }
+
+    fn app_collecting_chave() -> App {
+        let mut app = App::new(vec![make_global_auth_entry()], vec![]);
+        app.mode = Mode::CollectingCred {
+            script_idx: 0,
+            key: "CHAVE".to_string(),
+            resume_arg_idx: 0,
+            collected_args: agrr::executor::CollectedArgs::new(),
+            pending_creds: std::collections::HashMap::new(),
+            validation_error: None,
+        };
+        app
+    }
+
+    #[test]
+    fn senha_rejects_non_digit_keystroke_and_sets_validation_error() {
+        let mut app = app_collecting_senha();
+        handle_collecting_cred(&mut app, key(KeyCode::Char('a')));
+        let Mode::CollectingCred { validation_error, pending_creds, .. } = &app.mode else {
+            panic!("expected CollectingCred");
+        };
+        assert!(validation_error.is_some(), "validation_error should be set");
+        // The char should NOT have been appended
+        assert!(pending_creds.get("__input__SENHA").map_or(true, |v| v.is_empty()));
+    }
+
+    #[test]
+    fn senha_accepts_digit_keystroke() {
+        let mut app = app_collecting_senha();
+        handle_collecting_cred(&mut app, key(KeyCode::Char('5')));
+        let Mode::CollectingCred { validation_error, pending_creds, .. } = &app.mode else {
+            panic!("expected CollectingCred");
+        };
+        assert!(validation_error.is_none(), "should have no error after valid digit");
+        assert_eq!(pending_creds.get("__input__SENHA").map(String::as_str), Some("5"));
+    }
+
+    #[test]
+    fn senha_rejects_ninth_character_exceeding_max_length() {
+        let mut app = app_collecting_senha();
+        // Type 8 valid digits
+        for _ in 0..8 {
+            handle_collecting_cred(&mut app, key(KeyCode::Char('1')));
+        }
+        // 9th digit must be rejected
+        handle_collecting_cred(&mut app, key(KeyCode::Char('2')));
+        let Mode::CollectingCred { validation_error, pending_creds, .. } = &app.mode else {
+            panic!("expected CollectingCred");
+        };
+        assert!(validation_error.is_some(), "validation_error should be set for exceeding max_length");
+        let input = pending_creds.get("__input__SENHA").map(String::as_str).unwrap_or("");
+        assert_eq!(input.len(), 8, "input should remain at 8 characters");
+    }
+
+    #[test]
+    fn chave_rejects_ninth_character_exceeding_max_length() {
+        let mut app = app_collecting_chave();
+        // Type 8 characters
+        for _ in 0..8 {
+            handle_collecting_cred(&mut app, key(KeyCode::Char('x')));
+        }
+        // 9th must be rejected
+        handle_collecting_cred(&mut app, key(KeyCode::Char('y')));
+        let Mode::CollectingCred { validation_error, pending_creds, .. } = &app.mode else {
+            panic!("expected CollectingCred");
+        };
+        assert!(validation_error.is_some(), "validation_error should be set for exceeding max_length");
+        let input = pending_creds.get("__input__CHAVE").map(String::as_str).unwrap_or("");
+        assert_eq!(input.len(), 8, "CHAVE input should remain at 8 characters");
+    }
+
+    #[test]
+    fn chave_accepts_any_char_within_limit() {
+        let mut app = app_collecting_chave();
+        handle_collecting_cred(&mut app, key(KeyCode::Char('a')));
+        let Mode::CollectingCred { validation_error, .. } = &app.mode else {
+            panic!("expected CollectingCred");
+        };
+        assert!(validation_error.is_none());
+    }
+
+    #[test]
+    fn backspace_clears_validation_error() {
+        let mut app = app_collecting_senha();
+        // Trigger a validation error
+        handle_collecting_cred(&mut app, key(KeyCode::Char('a')));
+        assert!(matches!(&app.mode, Mode::CollectingCred { validation_error: Some(_), .. }));
+        // Backspace clears it
+        handle_collecting_cred(&mut app, key(KeyCode::Backspace));
+        assert!(matches!(&app.mode, Mode::CollectingCred { validation_error: None, .. }));
     }
 }

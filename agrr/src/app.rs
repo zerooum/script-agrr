@@ -57,6 +57,8 @@ pub enum Mode {
         resume_arg_idx: usize,
         collected_args: CollectedArgs,
         pending_creds: HashMap<String, String>,
+        /// Inline validation error shown below the input.
+        validation_error: Option<String>,
     },
     /// Asking whether to save a credential
     AskSaveCred {
@@ -213,6 +215,7 @@ impl App {
                         resume_arg_idx: arg_idx,
                         collected_args,
                         pending_creds,
+                        validation_error: None,
                     };
                     return;
                 }
@@ -229,6 +232,7 @@ impl App {
                     resume_arg_idx: arg_idx,
                     collected_args,
                     pending_creds,
+                    validation_error: None,
                 };
                 return;
             }

@@ -10,6 +10,7 @@ use crate::app::{App, Mode};
 use crate::manifest::ArgType;
 use super::theme::{TN_FG, TN_MUTED, TN_BLUE, TN_YELLOW, TN_ORANGE, TN_RED, TN_GREEN, is_masked_field};
 use super::layout::centered_rect;
+use crate::credentials::global_cred_constraint;
 
 // ─── Arg prompt ───────────────────────────────────────────────────────────────
 
@@ -179,7 +180,7 @@ pub(super) fn render_arg_prompt(frame: &mut Frame, app: &App, arg_idx: usize) {
 // ─── Credential prompt ────────────────────────────────────────────────────────
 
 pub(super) fn render_cred_prompt(frame: &mut Frame, app: &App, cred_key: &str) {
-    let Mode::CollectingCred { script_idx, pending_creds, .. } = &app.mode else {
+    let Mode::CollectingCred { script_idx, pending_creds, validation_error, .. } = &app.mode else {
         return;
     };
     let script = &app.registry[*script_idx];
@@ -213,7 +214,16 @@ pub(super) fn render_cred_prompt(frame: &mut Frame, app: &App, cred_key: &str) {
         "entrada visivel"
     };
 
-    let lines = vec![
+    // Build constraint hint for known global credential fields
+    let constraint_hint: Option<String> = global_cred_constraint(cred_key).map(|con| {
+        let mut parts = vec![format!("max {} chars", con.max_length)];
+        if con.pattern.is_some() {
+            parts.push("apenas dígitos".to_string());
+        }
+        parts.join("  ")
+    });
+
+    let mut lines: Vec<Line> = vec![
         Line::from(""),
         Line::from(vec![
             Span::styled("  script  ", Style::default().fg(TN_MUTED)),
@@ -231,22 +241,42 @@ pub(super) fn render_cred_prompt(frame: &mut Frame, app: &App, cred_key: &str) {
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  > ", Style::default().fg(TN_ORANGE)),
-            Span::styled(
-                format!("{}_", display),
-                Style::default().fg(TN_YELLOW),
-            ),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            format!("  {} — pressione Enter para confirmar", tipo_hint),
-            Style::default()
-                .fg(TN_MUTED)
-                .add_modifier(Modifier::ITALIC),
-        )),
     ];
+
+    if let Some(hint) = constraint_hint {
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(hint, Style::default().fg(TN_MUTED).add_modifier(Modifier::ITALIC)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  > ", Style::default().fg(TN_ORANGE)),
+        Span::styled(
+            format!("{}_", display),
+            Style::default().fg(TN_YELLOW),
+        ),
+    ]));
+
+    if let Some(err) = validation_error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                err.clone(),
+                Style::default().fg(TN_RED).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("  {} — pressione Enter para confirmar", tipo_hint),
+        Style::default()
+            .fg(TN_MUTED)
+            .add_modifier(Modifier::ITALIC),
+    )));
 
     frame.render_widget(
         Paragraph::new(lines).wrap(Wrap { trim: false }),
