@@ -428,6 +428,70 @@ def _validate_cwd() -> bool:
     return True
 
 
+def _check_git_branch() -> bool:
+    """Ensure the current git branch is master. Returns False if not."""
+    if not shutil.which("git"):
+        print("⚠  git not found — skipping branch check.", file=sys.stderr)
+        return True
+
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print("⚠  Could not determine git branch — skipping branch check.", file=sys.stderr)
+        return True
+
+    branch = result.stdout.strip()
+    if branch != "master":
+        print(
+            f"✗ Must be on branch 'master' to build, but current branch is '{branch}'.",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def _run_tests() -> bool:
+    """Run all unit tests (Rust, Python SDK, JS SDK). Returns True if all pass."""
+    print("\n── Running tests ─────────────────────────────────────────────────")
+    ok = True
+
+    # Rust tests
+    print("  cargo test --workspace ...")
+    r = subprocess.run(["cargo", "test", "--workspace"], cwd=PROJECT_ROOT)
+    if r.returncode != 0:
+        print("  ✗ Rust tests failed", file=sys.stderr)
+        ok = False
+    else:
+        print("  ✓ Rust tests")
+
+    # Python SDK tests
+    print("  Python SDK tests ...")
+    r = subprocess.run(
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
+        cwd=PROJECT_ROOT / "sdk" / "python",
+    )
+    if r.returncode != 0:
+        print("  ✗ Python SDK tests failed", file=sys.stderr)
+        ok = False
+    else:
+        print("  ✓ Python SDK tests")
+
+    # JS SDK tests
+    print("  JS SDK tests ...")
+    r = subprocess.run(["npm", "test"], cwd=PROJECT_ROOT / "sdk" / "js")
+    if r.returncode != 0:
+        print("  ✗ JS SDK tests failed", file=sys.stderr)
+        ok = False
+    else:
+        print("  ✓ JS SDK tests")
+
+    return ok
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -445,9 +509,26 @@ def main() -> int:
         nargs="*",
         help="Build only the specified script names (omit to build all).",
     )
+    parser.add_argument(
+        "--skip-tests",
+        action="store_true",
+        help="Skip running unit tests before building.",
+    )
+    parser.add_argument(
+        "--skip-branch-check",
+        action="store_true",
+        help="Skip the git branch check (allow building from non-master branches).",
+    )
     args = parser.parse_args()
 
     if not _validate_cwd():
+        return 1
+
+    if not args.skip_branch_check and not _check_git_branch():
+        return 1
+
+    if not args.skip_tests and not _run_tests():
+        print("\n✗ Tests failed — aborting build.", file=sys.stderr)
         return 1
 
     _check_prerequisites(args.skip_tui)
