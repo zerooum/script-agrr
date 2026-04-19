@@ -23,8 +23,12 @@ metadata:
    - `--agrr-run`: runs logic from env vars and exits 0/1/99.
 4. Place the adapted script in `scripts/`:
    - Single-file script: `scripts/<name>.py` or `scripts/<name>.js`
-   - Multi-file script: `scripts/<name>/main.py|main.js|main.mjs|main`
-5. Keep compatibility with manifest constraints (`name`, `description`, `group`, `version`, valid `args`/`requires_auth`).
+   - Multi-file script: `scripts/<name>/main.py|main.js|main.mjs|main` (binary supported)
+   - Avoid folder names starting with `_` because discovery ignores them.
+5. Keep compatibility with manifest constraints (`name`, `description`, `group`, `version`, optional `global_auth`, valid `requires_auth`/`args`).
+   - Every `args` entry must include `type`: `text`, `select`, or `multiselect`.
+   - `select`/`multiselect` require at least 2 `options`.
+   - `text` must not declare `options`; `max_length`/`pattern` are `text`-only.
 6. Validate with existing project tests/build commands.
 
 ## Must Follow
