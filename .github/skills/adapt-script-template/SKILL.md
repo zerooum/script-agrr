@@ -25,7 +25,7 @@ metadata:
    - Single-file script: `scripts/<name>.py` or `scripts/<name>.js`
    - Multi-file script: `scripts/<name>/main.py|main.js|main.mjs|main` (binary supported)
    - Avoid folder names starting with `_` because discovery ignores them.
-5. Keep compatibility with manifest constraints (`name`, `description`, `group`, `version`, optional `runtime` [ignored by CLI], optional `global_auth`, valid `requires_auth`/`args`).
+5. Ensure the manifest includes required non-empty fields (`name`, `description`, `group`, `version`) plus optional fields (`runtime` [ignored by CLI], `global_auth`, `requires_auth`, `args`) that satisfy validation rules.
    - Use `global_auth: true` when the script should receive shared `AGRR_CRED_CHAVE` and `AGRR_CRED_SENHA`.
    - Every `args` entry must include `type`: `text`, `select`, or `multiselect`.
    - `select`/`multiselect` require at least 2 `options`.
