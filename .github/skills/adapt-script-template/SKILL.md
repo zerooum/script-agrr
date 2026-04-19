@@ -25,14 +25,14 @@ metadata:
    - Single-file script: `scripts/<name>.py` or `scripts/<name>.js`
    - Multi-file script: `scripts/<name>/main.py|main.js|main.mjs|main` (binary supported)
    - Avoid folder names starting with `_` because discovery ignores them.
-5. Keep compatibility with manifest constraints (`name`, `description`, `group`, `version`, optional `global_auth`, valid `requires_auth`/`args`).
+5. Keep compatibility with manifest constraints (`name`, `description`, `group`, `version`, optional `runtime` [ignored by CLI], optional `global_auth`, valid `requires_auth`/`args`).
    - Use `global_auth: true` when the script should receive shared `AGRR_CRED_CHAVE` and `AGRR_CRED_SENHA`.
    - Every `args` entry must include `type`: `text`, `select`, or `multiselect`.
    - `select`/`multiselect` require at least 2 `options`.
    - `multiselect` options must not contain commas.
    - `required` defaults to `true`; set `required: false` for optional input.
    - `text` must not declare `options`; `max_length`/`pattern` are `text`-only.
-   - `pattern` supports `numeric`, `alpha`, `alphanumeric`, or `null`.
+   - `pattern` supports `"numeric"`, `"alpha"`, `"alphanumeric"`, or `null`.
 6. Validate with existing project tests/build commands.
 
 ## Must Follow
