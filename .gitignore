@@ -1,6 +1,7 @@
 /target
 /agrr/target
 /sdk/rust/target
+build/
 
 # Scripts — Rust targets
 scripts/**/target/
@@ -10,7 +11,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
-build/
 .venv/
 .pytest_cache/
 
